@@ -24,6 +24,11 @@ All endpoints are hosted as Vercel serverless functions under `/api`. Standard r
   - [Accept Job (`accept`)](#8-accept-job-accept)
   - [My Pickups (`myPickups`)](#9-my-pickups-mypickups)
   - [Deliver Pickup (`deliver`)](#10-deliver-pickup-deliver)
+- [Hub Management (`/api/hubs`)](#hub-management-apihubs)
+  - [List Hubs (`list`)](#1-list-hubs-list)
+  - [Nearest Hubs (`nearest`)](#2-nearest-hubs-nearest)
+  - [Hub Check-in (`checkin`)](#3-hub-check-in-checkin)
+  - [Hub Kiosk (`kiosk`)](#4-hub-kiosk-kiosk)
 - [Shared Utilities (`lib/util.js`)](#shared-utilities-libutiljs)
 
 ---
@@ -295,6 +300,111 @@ Marks an assigned pickup as delivered. Triggers claim completion and impact reco
   ```
 - **Response Fields**:
   - `ok`: number (`1`)
+
+---
+
+## Hub Management (`/api/hubs`)
+
+No authentication required for `list` and `nearest`. `checkin` and `kiosk` are public-facing hub operations (steward check-in and vending-machine kiosk).
+
+Uses the view `v_hub_status` (one row per compartment: `compartment_id`, `hub_id`, `hub_name`, `address`, `hub_type`, `latitude`, `longitude`, `hub_status`, `label`, `temp_controlled`, `max_weight_kg`, `free_kg`, `accepting`).
+
+### 1. List Hubs (`list`)
+Returns all hubs with their compartments, optionally sorted by distance to a given point.
+
+- **Method**: `GET`
+- **Query Parameters**:
+  - `a=list`: Action identifier.
+  - `lat` (number, optional): Latitude for distance calculation.
+  - `lng` (number, optional): Longitude for distance calculation.
+- **Response Fields**: Array of hub objects:
+  - `hub_id`: number
+  - `name`: string (hub name)
+  - `address`: string
+  - `hub_type`: string
+  - `latitude`: number
+  - `longitude`: number
+  - `status`: string (hub status)
+  - `distance_km`: number (only present when `lat` and `lng` are provided; rounded to 1 decimal, computed via `fn_distance_km`)
+  - `available_items`: number (count of `FOOD_LISTING` rows with this `hub_id`, status `'AVAILABLE'` and `expires_at > NOW()`)
+  - `compartments`: Array of:
+    - `compartment_id`: number
+    - `label`: string
+    - `temp_controlled`: boolean/number
+    - `free_kg`: number
+    - `accepting`: boolean/number
+
+### 2. Nearest Hubs (`nearest`)
+Returns the 3 closest hubs with status `'ACTIVE'`, same shape as `list`.
+
+- **Method**: `GET`
+- **Query Parameters**:
+  - `a=nearest`: Action identifier.
+  - `lat` (number, required): Latitude.
+  - `lng` (number, required): Longitude.
+- **Response Fields**: Array of up to 3 hub objects (same shape as `list`, always includes `distance_km`).
+- **Error Response (400)**:
+  ```json
+  { "error": "lat and lng are required" }
+  ```
+
+### 3. Hub Check-in (`checkin`)
+Demo steward check-in. Calls `sp_hub_checkin(hub_id, temp)`.
+
+- **Method**: `POST`
+- **Query Parameter**: `a=checkin`
+- **Request Body**:
+  ```json
+  {
+    "hub_id": 1,
+    "temp": 3.5
+  }
+  ```
+  - `hub_id` (number, required): Hub to check in.
+  - `temp` (number, optional): Temperature reading (default: `3.5`).
+- **Response Fields**:
+  - `ok`: boolean (`true`)
+- **Error Response (400)**: `{ "error": "hub_id is required" }`
+
+### 4. Hub Kiosk (`kiosk`)
+Hub vending-machine kiosk endpoint for drop-off and pick-up code verification.
+
+- **Method**: `POST`
+- **Query Parameter**: `a=kiosk`
+- **Request Body**:
+  ```json
+  {
+    "handover_id": 5,
+    "code": "123456"
+  }
+  ```
+  - `handover_id` (number, required): The `HUB_HANDOVER` row to operate on.
+  - `code` (string, required): 6-digit verification code entered by the user.
+- **Logic**:
+  1. Loads the `HUB_HANDOVER` row joined with `HUB_COMPARTMENT` for the compartment label. Returns `404` if not found.
+  2. **Status `LOCKED`** → `400 { "error": "Locked after 3 wrong codes. Ask the hub steward." }`
+  3. **Status `AWAITING_DROP`** → compares `hash(code)` with `drop_code_hash`:
+     - Match → sets status to `DROPPED`, returns:
+       ```json
+       {
+         "action": "DROP_OK",
+         "compartment": "A1",
+         "message": "Compartment A1 unlocked. Place the food inside and close the door."
+       }
+       ```
+     - Mismatch → increments `failed_attempts`, returns `400 { "error": "Wrong code. N attempts left." }`
+  4. **Status `DROPPED`** → compares `hash(code)` with `pickup_code_hash`:
+     - Match → sets status to `COLLECTED`, returns:
+       ```json
+       {
+         "action": "COLLECT_OK",
+         "compartment": "A1",
+         "message": "Compartment A1 unlocked. Take your food."
+       }
+       ```
+     - Mismatch → increments `failed_attempts`, returns `400 { "error": "Wrong code. N attempts left." }`
+  5. **Any other status** → `400 { "error": "Nothing to do for this order (status X)." }`
+- **Note**: A database trigger locks the handover at 3 failed attempts. Trigger error messages are returned as-is.
 
 ---
 
