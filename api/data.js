@@ -1,5 +1,14 @@
 const { pool, user, errJson, makeCode, hash } = require("../lib/util");
 
+// Helper: throw if volunteer's vrole doesn't cover the required task type
+const needVolunteerRole = (vrole, type) => {
+  // type is 'FOOD' or 'WASTE'
+  if (type === "FOOD" && vrole !== "FOOD_ONLY" && vrole !== "DUAL")
+    throw new Error("Your volunteer role does not include food deliveries");
+  if (type === "WASTE" && vrole !== "WASTE_ONLY" && vrole !== "DUAL")
+    throw new Error("Your volunteer role does not include waste runs");
+};
+
 module.exports = async (req, res) => {
   const u = user(req);
   if (!u) return res.status(401).json({ error: "Please log in" });
@@ -22,13 +31,16 @@ module.exports = async (req, res) => {
             "SELECT org_name name, address, latitude, longitude, recipient_type type FROM RECIPIENT WHERE recipient_id=?",
             [u.pid]);
         } else {
+          // Volunteer: include vrole and service_radius_km so UI knows which tabs to show
           [row] = await pool.query(
-            "SELECT volunteer_name name, home_address address, home_lat latitude, home_lng longitude, vehicle_type type FROM VOLUNTEER WHERE volunteer_id=?",
+            `SELECT volunteer_name name, home_address address, home_lat latitude, home_lng longitude,
+                    vehicle_type type, volunteer_role vrole, service_radius_km
+             FROM VOLUNTEER WHERE volunteer_id=?`,
             [u.pid]);
         }
         const profile = row[0];
         if (!profile) return res.status(404).json({ error: "Profile not found" });
-        return res.json(profile);
+        return res.json({ ...profile, role: u.role });
       }
 
       // ── categories ──────────────────────────────────────────────────────────
@@ -50,16 +62,13 @@ module.exports = async (req, res) => {
           tag_ids = [], allergens = []
         } = b;
 
-        // Validate storage vs hub
-        if (hub_id && storage === "HOT") {
+        if (hub_id && storage === "HOT")
           return res.status(400).json({ error: "Hub listings cannot use HOT storage" });
-        }
 
         const conn = await pool.getConnection();
         try {
           await conn.beginTransaction();
 
-          // Hub listing: force is_sealed=1
           const sealedVal = hub_id ? 1 : (is_sealed ? 1 : 0);
 
           const [ins] = await conn.query(
@@ -72,31 +81,23 @@ module.exports = async (req, res) => {
              storage, sealedVal, hub_id || null, hours]);
           const listingId = ins.insertId;
 
-          // Diet tags → LISTING_TAG with contains_flag=1
-          for (const tid of tag_ids) {
+          for (const tid of tag_ids)
             await conn.query(
               "INSERT INTO LISTING_TAG (listing_id, tag_id, contains_flag) VALUES (?, ?, 1)",
               [listingId, tid]);
-          }
 
-          // Allergen rows with caller-supplied contains flag
-          for (const alg of allergens) {
+          for (const alg of allergens)
             await conn.query(
               "INSERT INTO LISTING_TAG (listing_id, tag_id, contains_flag) VALUES (?, ?, ?)",
               [listingId, alg.tag_id, alg.contains ? 1 : 0]);
-          }
 
-          // Safety check — VISUAL for direct donations, SEAL for hub listings
           const checkType = hub_id ? "SEAL" : "VISUAL";
           await conn.query(
             "INSERT INTO FOOD_SAFETY_CHECK (listing_id, stage, check_type, result) VALUES (?, 'LISTING', ?, 'PASS')",
             [listingId, checkType]);
 
           await conn.commit();
-
-          // Fire-and-forget match score computation
           try { await pool.query("CALL sp_compute_match_scores(?)", [listingId]); } catch (_) {}
-
           return res.json({ id: listingId });
         } catch (e) {
           await conn.rollback();
@@ -110,16 +111,14 @@ module.exports = async (req, res) => {
       case "reportUnfit": {
         need("DONOR");
         const { category_id, food_name, qty, unit, weight, grade } = b;
-        if (!["ANIMAL_OK", "BIOGAS_ONLY"].includes(grade)) {
+        if (!["ANIMAL_OK", "BIOGAS_ONLY"].includes(grade))
           return res.status(400).json({ error: "grade must be ANIMAL_OK or BIOGAS_ONLY" });
-        }
 
         const kg = qty * weight;
         const conn = await pool.getConnection();
         try {
           await conn.beginTransaction();
 
-          // Insert an already-expired listing (not fit for human consumption)
           const [ins] = await conn.query(
             `INSERT INTO FOOD_LISTING
               (donor_id, category_id, food_name, quantity_total, quantity_unit,
@@ -130,13 +129,11 @@ module.exports = async (req, res) => {
             [u.pid, category_id, food_name, qty, unit || "kg", weight]);
           const listingId = ins.insertId;
 
-          // Pick a partner
           let [[partnerRow]] = await conn.query(
             "SELECT fn_pick_partner(?, ?, ?) AS partner_id",
             [grade === "ANIMAL_OK" ? "FARM" : "BIOGAS", category_id, kg]);
 
           if ((!partnerRow || !partnerRow.partner_id) && grade === "ANIMAL_OK") {
-            // Fallback to ANIMAL_SHELTER
             [[partnerRow]] = await conn.query(
               "SELECT fn_pick_partner('ANIMAL_SHELTER', ?, ?) AS partner_id",
               [category_id, kg]);
@@ -148,29 +145,21 @@ module.exports = async (req, res) => {
           }
           const partnerId = partnerRow.partner_id;
 
-          // Fetch partner details
           const [[partner]] = await conn.query(
             "SELECT partner_name, partner_type FROM WASTE_PARTNER WHERE partner_id=?",
             [partnerId]);
 
-          // Insert routing row
           await conn.query(
-            `INSERT INTO WASTE_ROUTING
-              (listing_id, route_type, partner_id, condition_grade, quantity_kg)
+            `INSERT INTO WASTE_ROUTING (listing_id, route_type, partner_id, condition_grade, quantity_kg)
              VALUES (?, ?, ?, ?, ?)`,
             [listingId, partner.partner_type, partnerId, grade, kg]);
 
-          // Mark listing as ROUTED
           await conn.query(
             "UPDATE FOOD_LISTING SET status='ROUTED' WHERE listing_id=?",
             [listingId]);
 
           await conn.commit();
-          return res.json({
-            partner_name: partner.partner_name,
-            route_type: partner.partner_type,
-            kg
-          });
+          return res.json({ partner_name: partner.partner_name, route_type: partner.partner_type, kg });
         } catch (e) {
           await conn.rollback();
           throw e;
@@ -193,18 +182,16 @@ module.exports = async (req, res) => {
            ORDER BY l.listing_id DESC`,
           [u.pid]);
 
-        // For hub listings, attach handovers
         for (const row of listings) {
           if (row.hub_name) {
             const handovers = await q(
               `SELECT hh.handover_id, hh.claim_id,
-                      COALESCE(d.donor_name, r.org_name) AS recipient_name,
+                      r.org_name AS recipient_name,
                       c.quantity_claimed, hh.status,
                       hc.label AS compartment_label
                FROM HUB_HANDOVER hh
                JOIN CLAIM c ON c.claim_id = hh.claim_id
                JOIN FOOD_LISTING fl ON fl.listing_id = c.listing_id
-               LEFT JOIN DONOR d ON d.donor_id = fl.donor_id AND 1=0
                LEFT JOIN RECIPIENT r ON r.recipient_id = c.recipient_id
                LEFT JOIN HUB_COMPARTMENT hc ON hc.compartment_id = hh.compartment_id
                WHERE fl.donor_id = ? AND fl.listing_id = ?
@@ -224,7 +211,6 @@ module.exports = async (req, res) => {
             row.handovers = [];
           }
         }
-
         return res.json(listings);
       }
 
@@ -245,7 +231,6 @@ module.exports = async (req, res) => {
       case "feed": {
         need("RECIPIENT");
 
-        // Check whether this recipient has cold storage
         const [[recip]] = await pool.query(
           "SELECT has_cold_storage FROM RECIPIENT WHERE recipient_id=?", [u.pid]);
         const hasCold = recip && recip.has_cold_storage;
@@ -281,24 +266,20 @@ module.exports = async (req, res) => {
         try {
           await conn.beginTransaction();
 
-          // Insert the claim
           const [ins] = await conn.query(
             "INSERT INTO CLAIM (listing_id, recipient_id, quantity_claimed) VALUES (?, ?, ?)",
             [listing_id, u.pid, qty]);
           const claimId = ins.insertId;
 
-          // Check if listing is routed through a hub
           const [[listing]] = await conn.query(
             "SELECT hub_id, storage_type, weight_per_unit_kg, expires_at FROM FOOD_LISTING WHERE listing_id=?",
             [listing_id]);
 
           if (!listing.hub_id) {
-            // Direct delivery — volunteer will handle it
             await conn.commit();
             return res.json({ claim_id: claimId, handover_id: null, hub_name: null, compartment: null, pickup_code: null });
           }
 
-          // Hub listing — find a suitable compartment
           const needsCold = ["REFRIGERATED", "FROZEN"].includes(listing.storage_type) ? 1 : 0;
           const requiredKg = qty * listing.weight_per_unit_kg;
 
@@ -320,9 +301,6 @@ module.exports = async (req, res) => {
           }
 
           const comp = compartments[0];
-          const codeExpiry = `LEAST(
-            (SELECT expires_at FROM FOOD_LISTING WHERE listing_id=${conn.escape(listing_id)}),
-            NOW() + INTERVAL 24 HOUR)`;
 
           const [hins] = await conn.query(
             `INSERT INTO HUB_HANDOVER
@@ -334,12 +312,11 @@ module.exports = async (req, res) => {
              hash(makeCode(claimId, "drop")),
              hash(makeCode(claimId, "pickup")),
              listing_id]);
-          const handoverId = hins.insertId;
 
           await conn.commit();
           return res.json({
             claim_id: claimId,
-            handover_id: handoverId,
+            handover_id: hins.insertId,
             hub_name: comp.hub_name,
             compartment: comp.label,
             pickup_code: makeCode(claimId, "pickup")
@@ -392,29 +369,42 @@ module.exports = async (req, res) => {
         })));
       }
 
-      // ── myImpact (RECIPIENT) — overrides the DONOR myImpact below via role check ──
+      // ── myImpact — role-branched ──────────────────────────────────────────────
       case "myImpact": {
         if (u.role === "RECIPIENT") {
-          // Count of COMPLETED claims and total kg/meals from IMPACT_RECORD
           const [[summary]] = await pool.query(
             `SELECT
-               COUNT(DISTINCT c.claim_id)                        AS claims_completed,
-               COALESCE(SUM(ir.quantity_kg), 0)                  AS kg_received,
-               COALESCE(SUM(ir.meals_equivalent), 0)             AS meals_received
+               COUNT(DISTINCT c.claim_id)            AS claims_completed,
+               COALESCE(SUM(ir.quantity_kg), 0)       AS kg_received,
+               COALESCE(SUM(ir.meals_equivalent), 0)  AS meals_received
              FROM CLAIM c
-             LEFT JOIN PICKUP p
-               ON p.claim_id = c.claim_id
-             LEFT JOIN HUB_HANDOVER hh
-               ON hh.claim_id = c.claim_id
+             LEFT JOIN PICKUP p       ON p.claim_id  = c.claim_id
+             LEFT JOIN HUB_HANDOVER hh ON hh.claim_id = c.claim_id
              LEFT JOIN IMPACT_RECORD ir
-               ON ir.pickup_id = p.pickup_id
-               OR ir.handover_id = hh.handover_id
-             WHERE c.recipient_id = ?
-               AND c.claim_status = 'COMPLETED'`,
+               ON ir.pickup_id = p.pickup_id OR ir.handover_id = hh.handover_id
+             WHERE c.recipient_id = ? AND c.claim_status = 'COMPLETED'`,
             [u.pid]);
           return res.json(summary);
         }
-        // DONOR path falls through to the case below
+
+        if (u.role === "VOLUNTEER") {
+          const [[summary]] = await pool.query(
+            `SELECT
+               COUNT(DISTINCT p.pickup_id)            AS deliveries_completed,
+               COALESCE(SUM(ir.quantity_kg), 0)       AS kg_delivered,
+               COALESCE(SUM(ir.meals_equivalent), 0)  AS meals_delivered,
+               COALESCE(
+                 (SELECT SUM(wc.weighed_kg)
+                  FROM WASTE_COLLECTION wc
+                  WHERE wc.volunteer_id = ?), 0)       AS waste_kg_collected
+             FROM PICKUP p
+             LEFT JOIN IMPACT_RECORD ir ON ir.pickup_id = p.pickup_id
+             WHERE p.volunteer_id = ? AND p.pickup_status = 'DELIVERED'`,
+            [u.pid, u.pid]);
+          return res.json(summary);
+        }
+
+        // DONOR
         need("DONOR");
         const [rows] = await pool.query(
           "SELECT meals_saved, kg_diverted, co2_avoided_kg, trust_score FROM v_donor_impact WHERE donor_id=?",
@@ -422,36 +412,139 @@ module.exports = async (req, res) => {
         return res.json(rows[0] || { meals_saved: 0, kg_diverted: 0, co2_avoided_kg: 0, trust_score: 0 });
       }
 
+      // ════════════════════════════════════════════════════════════════════════
+      // VOLUNTEER — FOOD DELIVERIES (FOOD_ONLY or DUAL)
+      // ════════════════════════════════════════════════════════════════════════
+
       // ── jobs ─────────────────────────────────────────────────────────────────
       case "jobs": {
         need("VOLUNTEER");
-        const jobs = await q(
-          `SELECT c.claim_id, l.food_name, c.quantity_claimed,
-                  d.address pickup_from, r.address deliver_to
+
+        // Ensure upcoming slots exist for the next 7 days
+        try { await pool.query("CALL sp_ensure_slots(7)"); } catch (_) {}
+
+        const [[vol]] = await pool.query(
+          "SELECT home_lat, home_lng, service_radius_km, volunteer_role vrole FROM VOLUNTEER WHERE volunteer_id=?",
+          [u.pid]);
+        needVolunteerRole(vol.vrole, "FOOD");
+
+        // One query per claim — attach eligible slots in JS to avoid a complex correlated subquery
+        const claims = await q(
+          `SELECT
+             c.claim_id,
+             l.food_name,
+             c.quantity_claimed,
+             d.address           AS pickup_from,
+             r.address           AS deliver_to,
+             l.expires_at,
+             fn_distance_km(?, ?, d.latitude, d.longitude)  AS distance_km,
+             fn_distance_km(?, ?, d.latitude, d.longitude) <= v.service_radius_km
+                                  AS within_radius,
+             r.receiving_from,
+             r.receiving_until
            FROM CLAIM c
-           JOIN FOOD_LISTING l ON l.listing_id = c.listing_id
-           JOIN DONOR d ON d.donor_id = l.donor_id
-           JOIN RECIPIENT r ON r.recipient_id = c.recipient_id
-           WHERE c.claim_status = 'PENDING' AND l.hub_id IS NULL
+           JOIN FOOD_LISTING l  ON l.listing_id   = c.listing_id
+           JOIN DONOR d         ON d.donor_id      = l.donor_id
+           JOIN RECIPIENT r     ON r.recipient_id  = c.recipient_id
+           JOIN VOLUNTEER v     ON v.volunteer_id  = ?
+           WHERE c.claim_status IN ('PENDING','APPROVED')
+             AND l.hub_id IS NULL
+             AND l.expires_at > NOW()
              AND NOT EXISTS (
                SELECT 1 FROM PICKUP p
-               WHERE p.claim_id = c.claim_id AND p.pickup_status <> 'CANCELLED')`);
-        const slots = await q(
-          `SELECT s.slot_id, s.slot_date, s.start_time, s.pickup_area
+               WHERE p.claim_id = c.claim_id
+                 AND p.pickup_status IN ('SCHEDULED','ACCEPTED','IN_TRANSIT','DELIVERED'))
+           ORDER BY distance_km`,
+          [vol.home_lat, vol.home_lng, vol.home_lat, vol.home_lng, u.pid]);
+
+        // Fetch eligible FOOD slots once (not per-claim) then filter in JS
+        const allSlots = await q(
+          `SELECT s.slot_id, s.slot_date, s.start_time, s.end_time, s.capacity,
+                  (SELECT COUNT(*) FROM PICKUP p2
+                   WHERE p2.slot_id = s.slot_id
+                     AND p2.pickup_status NOT IN ('CANCELLED','FAILED')) AS active_pickups
            FROM DELIVERY_SLOT s
-           WHERE s.slot_date >= CURDATE()
-             AND s.capacity > (
-               SELECT COUNT(*) FROM PICKUP p
-               WHERE p.slot_id = s.slot_id AND p.pickup_status <> 'CANCELLED')`);
-        return res.json({ jobs, slots });
+           WHERE s.run_type = 'FOOD'
+             AND TIMESTAMP(s.slot_date, s.start_time) > NOW()
+             AND s.slot_date >= CURDATE()
+             AND fn_volunteer_slot_conflict(?, s.slot_id) = 0`,
+          [u.pid]);
+
+        const result = claims.map(c => {
+          const eligibleSlots = allSlots.filter(s =>
+            // slot must end before or at listing expiry
+            new Date(`${s.slot_date.toISOString ? s.slot_date.toISOString().slice(0,10) : String(s.slot_date).slice(0,10)}T${s.end_time}`) <= new Date(c.expires_at) &&
+            // respect recipient receiving window if set
+            (!c.receiving_from || s.start_time >= c.receiving_from) &&
+            (!c.receiving_until || s.end_time <= c.receiving_until) &&
+            // free capacity
+            s.active_pickups < s.capacity
+          ).map(s => ({
+            slot_id: s.slot_id,
+            slot_date: s.slot_date,
+            start_time: s.start_time,
+            end_time: s.end_time
+          }));
+
+          return {
+            claim_id: c.claim_id,
+            food_name: c.food_name,
+            quantity_claimed: c.quantity_claimed,
+            pickup_from: c.pickup_from,
+            deliver_to: c.deliver_to,
+            expires_at: c.expires_at,
+            distance_km: c.distance_km,
+            within_radius: !!c.within_radius,
+            slots: eligibleSlots
+          };
+        });
+
+        return res.json(result);
       }
 
       // ── accept ────────────────────────────────────────────────────────────────
       case "accept": {
         need("VOLUNTEER");
-        await pool.query(
+        const [[vol]] = await pool.query(
+          "SELECT volunteer_role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
+        needVolunteerRole(vol.vrole, "FOOD");
+
+        const [ins] = await pool.query(
           "INSERT INTO PICKUP (claim_id, volunteer_id, slot_id) VALUES (?, ?, ?)",
           [b.claim_id, u.pid, b.slot_id]);
+        await pool.query(
+          "UPDATE PICKUP SET pickup_status='ACCEPTED' WHERE pickup_id=?",
+          [ins.insertId]);
+        return res.json({ ok: 1, pickup_id: ins.insertId });
+      }
+
+      // ── setStatus ─────────────────────────────────────────────────────────────
+      case "setStatus": {
+        need("VOLUNTEER");
+        const { pickup_id, status, failure_reason } = b;
+        const validStatuses = ["IN_TRANSIT", "DELIVERED", "FAILED"];
+        const validReasons  = ["FOOD_UNSAFE", "RECIPIENT_UNAVAILABLE", "VEHICLE_BREAKDOWN", "OTHER"];
+
+        if (!validStatuses.includes(status))
+          return res.status(400).json({ error: `status must be one of: ${validStatuses.join(", ")}` });
+        if (status === "FAILED" && !validReasons.includes(failure_reason))
+          return res.status(400).json({ error: `failure_reason must be one of: ${validReasons.join(", ")}` });
+
+        if (status === "FAILED") {
+          await pool.query(
+            `UPDATE PICKUP
+             SET pickup_status = 'FAILED', failure_reason = ?,
+                 delivered_at = NULL
+             WHERE pickup_id = ? AND volunteer_id = ?`,
+            [failure_reason, pickup_id, u.pid]);
+        } else {
+          await pool.query(
+            `UPDATE PICKUP
+             SET pickup_status = ?,
+                 delivered_at = IF(? = 'DELIVERED', NOW(), delivered_at)
+             WHERE pickup_id = ? AND volunteer_id = ?`,
+            [status, status, pickup_id, u.pid]);
+        }
         return res.json({ ok: 1 });
       }
 
@@ -459,26 +552,167 @@ module.exports = async (req, res) => {
       case "myPickups": {
         need("VOLUNTEER");
         return res.json(await q(
-          `SELECT p.pickup_id, l.food_name, p.pickup_status,
-                  d.address pickup_from, r.address deliver_to
+          `SELECT p.pickup_id, l.food_name, c.quantity_claimed, p.pickup_status,
+                  d.address  AS pickup_from,
+                  r.address  AS deliver_to,
+                  s.slot_date, s.start_time, s.end_time,
+                  p.delivered_at
            FROM PICKUP p
-           JOIN CLAIM c ON c.claim_id = p.claim_id
-           JOIN FOOD_LISTING l ON l.listing_id = c.listing_id
-           JOIN DONOR d ON d.donor_id = l.donor_id
-           JOIN RECIPIENT r ON r.recipient_id = c.recipient_id
+           JOIN CLAIM c        ON c.claim_id    = p.claim_id
+           JOIN FOOD_LISTING l ON l.listing_id  = c.listing_id
+           JOIN DONOR d        ON d.donor_id    = l.donor_id
+           JOIN RECIPIENT r    ON r.recipient_id = c.recipient_id
+           LEFT JOIN DELIVERY_SLOT s ON s.slot_id = p.slot_id
            WHERE p.volunteer_id = ?
            ORDER BY p.pickup_id DESC`,
           [u.pid]));
       }
 
-      // ── deliver ───────────────────────────────────────────────────────────────
+      // ── deliver (legacy alias → setStatus DELIVERED) ──────────────────────────
       case "deliver": {
         need("VOLUNTEER");
         await pool.query(
-          `UPDATE PICKUP SET pickup_status='DELIVERED'
+          `UPDATE PICKUP SET pickup_status='DELIVERED', delivered_at=NOW()
            WHERE pickup_id=? AND volunteer_id=? AND pickup_status<>'DELIVERED'`,
           [b.pickup_id, u.pid]);
         return res.json({ ok: 1 });
+      }
+
+      // ════════════════════════════════════════════════════════════════════════
+      // VOLUNTEER — WASTE RUNS (WASTE_ONLY or DUAL)
+      // ════════════════════════════════════════════════════════════════════════
+
+      // ── wasteJobs ─────────────────────────────────────────────────────────────
+      case "wasteJobs": {
+        need("VOLUNTEER");
+        const [[vol]] = await pool.query(
+          "SELECT volunteer_role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
+        needVolunteerRole(vol.vrole, "WASTE");
+
+        return res.json(await q(
+          `SELECT wr.routing_id AS waste_id,
+                  l.food_name,
+                  d.address    AS donor_address,
+                  wr.quantity_kg,
+                  wr.condition_grade,
+                  wr.route_type,
+                  wp.partner_id,
+                  wp.partner_name,
+                  wp.address   AS partner_address
+           FROM WASTE_ROUTING wr
+           JOIN FOOD_LISTING l   ON l.listing_id  = wr.listing_id
+           JOIN DONOR d          ON d.donor_id     = l.donor_id
+           JOIN WASTE_PARTNER wp ON wp.partner_id  = wr.partner_id
+           WHERE wr.status = 'PENDING'
+             AND wr.collection_id IS NULL
+           ORDER BY wr.routing_id`));
+      }
+
+      // ── wasteSlots ────────────────────────────────────────────────────────────
+      case "wasteSlots": {
+        need("VOLUNTEER");
+
+        try { await pool.query("CALL sp_ensure_slots(7)"); } catch (_) {}
+
+        const [[vol]] = await pool.query(
+          "SELECT volunteer_role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
+        needVolunteerRole(vol.vrole, "WASTE");
+
+        return res.json(await q(
+          `SELECT s.slot_id, s.slot_date, s.start_time, s.end_time,
+                  s.capacity,
+                  (SELECT COUNT(*) FROM WASTE_COLLECTION wc
+                   WHERE wc.slot_id = s.slot_id) AS booked
+           FROM DELIVERY_SLOT s
+           WHERE s.run_type = 'WASTE'
+             AND s.slot_date >= CURDATE()
+             AND TIMESTAMP(s.slot_date, s.start_time) > NOW()
+             AND s.capacity > (SELECT COUNT(*) FROM WASTE_COLLECTION wc WHERE wc.slot_id = s.slot_id)
+             AND fn_volunteer_slot_conflict(?, s.slot_id) = 0
+           ORDER BY s.slot_date, s.start_time`,
+          [u.pid]));
+      }
+
+      // ── containers ────────────────────────────────────────────────────────────
+      case "containers": {
+        need("VOLUNTEER");
+        return res.json(await q(
+          `SELECT container_id, container_label, container_type, capacity_kg
+           FROM CONTAINER
+           WHERE container_type = 'WASTE'
+           ORDER BY container_label`));
+      }
+
+      // ── collect ───────────────────────────────────────────────────────────────
+      case "collect": {
+        need("VOLUNTEER");
+        const { waste_ids, slot_id, container_id, vehicle_no, weighed_kg } = b;
+
+        if (!Array.isArray(waste_ids) || !waste_ids.length)
+          return res.status(400).json({ error: "waste_ids must be a non-empty array" });
+
+        const [[vol]] = await pool.query(
+          "SELECT volunteer_role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
+        needVolunteerRole(vol.vrole, "WASTE");
+
+        const conn = await pool.getConnection();
+        try {
+          await conn.beginTransaction();
+
+          // Verify all waste_ids belong to the same partner and are still PENDING
+          const placeholders = waste_ids.map(() => "?").join(",");
+          const [rows] = await conn.query(
+            `SELECT DISTINCT wr.partner_id
+             FROM WASTE_ROUTING wr
+             WHERE wr.routing_id IN (${placeholders})
+               AND wr.status = 'PENDING'
+               AND wr.collection_id IS NULL`,
+            waste_ids);
+
+          if (rows.length === 0)
+            throw new Error("No matching PENDING waste routings found");
+          if (rows.length > 1)
+            throw new Error("All waste_ids must belong to the same partner");
+
+          const partnerId = rows[0].partner_id;
+          const receiptRef = `RCPT-${partnerId}-${Date.now()}`;
+
+          const [ins] = await conn.query(
+            `INSERT INTO WASTE_COLLECTION
+              (partner_id, slot_id, volunteer_id, container_id,
+               source_type, vehicle_no, weighed_kg, receipt_ref)
+             VALUES (?, ?, ?, ?, 'DONOR_SITE', ?, ?, ?)`,
+            [partnerId, slot_id, u.pid, container_id, vehicle_no, weighed_kg, receiptRef]);
+          const collectionId = ins.insertId;
+
+          // Link routings — trigger on WASTE_ROUTING will set status='COMPLETED'
+          await conn.query(
+            `UPDATE WASTE_ROUTING
+             SET collection_id = ?
+             WHERE routing_id IN (${placeholders}) AND status = 'PENDING'`,
+            [collectionId, ...waste_ids]);
+
+          await conn.commit();
+          return res.json({ ok: 1, collection_id: collectionId, receipt_ref: receiptRef });
+        } catch (e) {
+          await conn.rollback();
+          throw e;
+        } finally {
+          conn.release();
+        }
+      }
+
+      // ── myCollections ─────────────────────────────────────────────────────────
+      case "myCollections": {
+        need("VOLUNTEER");
+        return res.json(await q(
+          `SELECT wc.collection_id, wp.partner_name, wc.weighed_kg,
+                  wc.receipt_ref, wc.collected_at
+           FROM WASTE_COLLECTION wc
+           JOIN WASTE_PARTNER wp ON wp.partner_id = wc.partner_id
+           WHERE wc.volunteer_id = ?
+           ORDER BY wc.collection_id DESC`,
+          [u.pid]));
       }
 
       default:

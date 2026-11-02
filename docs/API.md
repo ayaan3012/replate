@@ -26,10 +26,16 @@ All endpoints are hosted as Vercel serverless functions under `/api`. Standard r
   - [Claim Listing (`claim`)](#10-claim-listing-claim)
   - [My Claims (`myClaims`)](#11-my-claims-myclaims)
   - [My Impact — Recipient (`myImpact`)](#12-my-impact-myimpact--recipient)
-  - [Available Jobs & Slots (`jobs`)](#13-available-jobs--slots-jobs)
-  - [Accept Job (`accept`)](#14-accept-job-accept)
-  - [My Pickups (`myPickups`)](#15-my-pickups-mypickups)
-  - [Deliver Pickup (`deliver`)](#16-deliver-pickup-deliver)
+  - [Available Jobs (`jobs`) — Food](#13-available-jobs-jobs--volunteer--food)
+  - [Accept Job (`accept`) — Food](#14-accept-job-accept--volunteer--food)
+  - [Set Pickup Status (`setStatus`)](#15-set-pickup-status-setstatus--volunteer--food)
+  - [My Pickups (`myPickups`)](#16-my-pickups-mypickups--volunteer--food)
+  - [Waste Jobs (`wasteJobs`)](#17-waste-jobs-wastejobs--volunteer--waste)
+  - [Waste Slots (`wasteSlots`)](#18-waste-slots-wasteslots--volunteer--waste)
+  - [Containers (`containers`)](#19-containers-containers--volunteer--waste)
+  - [Collect Waste (`collect`)](#20-collect-waste-collect--volunteer--waste)
+  - [My Collections (`myCollections`)](#21-my-collections-mycollections--volunteer--waste)
+  - [My Impact — Volunteer (`myImpact`)](#22-my-impact-myimpact--volunteer)
 - [Hub Management (`/api/hubs`)](#hub-management-apihubs)
   - [List Hubs (`list`)](#1-list-hubs-list)
   - [Nearest Hubs (`nearest`)](#2-nearest-hubs-nearest)
@@ -156,17 +162,21 @@ Geocodes an address string to latitude and longitude coordinates in India (`coun
 Requires authentication (`t` session cookie). Returns 401 if not logged in.
 
 ### 1. Profile (`profile`)
-Returns the logged-in user's own profile fields.
+Returns the logged-in user's own profile fields. Always includes a `role` field so the UI knows which tabs to show.
 
 - **Role Required**: Any (`DONOR`, `RECIPIENT`, `VOLUNTEER`)
 - **Method**: `GET` (or `POST`)
 - **Query Parameter**: `a=profile`
-- **Response Fields**:
+- **Response Fields** (all roles):
   - `name`: string
   - `address`: string
   - `latitude`: number
   - `longitude`: number
   - `type`: string (role-specific type: `donor_type`, `recipient_type`, or `vehicle_type`)
+  - `role`: string (`"DONOR"` | `"RECIPIENT"` | `"VOLUNTEER"`)
+- **Additional fields for `VOLUNTEER`**:
+  - `vrole`: string (`"FOOD_ONLY"` | `"WASTE_ONLY"` | `"DUAL"`) — determines which tabs the UI shows
+  - `service_radius_km`: number
 
 ### 2. Categories (`categories`)
 Returns all food categories.
@@ -389,43 +399,73 @@ Returns this recipient's impact summary: count of completed claims, total kg rec
 
 > **Note**: `myImpact` also works for `DONOR` (see [§8](#8-my-impact-myimpact--donor)) — the response shape differs by role.
 
-### 13. Available Jobs & Slots (`jobs`)
-Returns unassigned delivery jobs and available delivery slots for volunteers.
+### 13. Available Jobs (`jobs`) — Volunteer / Food
+Returns claimable food delivery jobs for this volunteer, each with a pre-filtered list of eligible slots. Calls `sp_ensure_slots(7)` to seed the next 7 days of slots before querying.
 
-- **Role Required**: `VOLUNTEER`
+- **Role Required**: `VOLUNTEER` with `vrole` `FOOD_ONLY` or `DUAL`
 - **Method**: `GET` (or `POST`)
 - **Query Parameter**: `a=jobs`
-- **Response Fields**:
-  - `jobs`: Array of:
-    - `claim_id`: number
-    - `food_name`: string
-    - `quantity_claimed`: number
-    - `pickup_from`: string (Donor address)
-    - `deliver_to`: string (Recipient address)
+- **Job filtering**:
+  - `claim_status IN ('PENDING','APPROVED')`
+  - `hub_id IS NULL` (direct deliveries only)
+  - `expires_at > NOW()`
+  - No existing `PICKUP` in status `SCHEDULED`, `ACCEPTED`, `IN_TRANSIT`, or `DELIVERED`
+- **Slot filtering** (per job):
+  - `run_type = 'FOOD'`, `TIMESTAMP(slot_date, start_time) > NOW()`
+  - `TIMESTAMP(slot_date, end_time) <= listing.expires_at`
+  - Within recipient's `receiving_from` / `receiving_until` window (when set)
+  - Free capacity: active pickups < `capacity`
+  - `fn_volunteer_slot_conflict(volunteer_id, slot_id) = 0`
+- **Response Fields**: Array sorted by `distance_km`, each element:
+  - `claim_id`: number
+  - `food_name`: string
+  - `quantity_claimed`: number
+  - `pickup_from`: string (donor address)
+  - `deliver_to`: string (recipient address)
+  - `expires_at`: ISO timestamp
+  - `distance_km`: number (Haversine via `fn_distance_km` from volunteer home to donor)
+  - `within_radius`: boolean (`distance_km <= service_radius_km`)
   - `slots`: Array of:
     - `slot_id`: number
     - `slot_date`: string
     - `start_time`: string
-    - `pickup_area`: string
+    - `end_time`: string
 
-### 14. Accept Job (`accept`)
-Assigns a volunteer to a delivery claim and delivery slot.
+### 14. Accept Job (`accept`) — Volunteer / Food
+Assigns this volunteer to a food delivery claim and slot.
 
-- **Role Required**: `VOLUNTEER`
+- **Role Required**: `VOLUNTEER` with `vrole` `FOOD_ONLY` or `DUAL`
 - **Method**: `POST`
 - **Query Parameter**: `a=accept`
 - **Request Body**:
   ```json
-  {
-    "claim_id": 15,
-    "slot_id": 3
-  }
+  { "claim_id": 15, "slot_id": 3 }
   ```
 - **Response Fields**:
   - `ok`: number (`1`)
+  - `pickup_id`: number (newly created `PICKUP` row)
 
-### 15. My Pickups (`myPickups`)
-Returns pickups assigned to the logged-in volunteer.
+### 15. Set Pickup Status (`setStatus`) — Volunteer / Food
+Updates the status of a pickup owned by this volunteer.
+
+- **Role Required**: `VOLUNTEER`
+- **Method**: `POST`
+- **Query Parameter**: `a=setStatus`
+- **Request Body**:
+  ```json
+  {
+    "pickup_id": 8,
+    "status": "IN_TRANSIT",
+    "failure_reason": null
+  }
+  ```
+  - `status` (string, required): `"IN_TRANSIT"`, `"DELIVERED"`, or `"FAILED"`.
+  - `failure_reason` (string, required when `status` is `"FAILED"`): one of `"FOOD_UNSAFE"`, `"RECIPIENT_UNAVAILABLE"`, `"VEHICLE_BREAKDOWN"`, `"OTHER"`.
+- **Response Fields**:
+  - `ok`: number (`1`)
+
+### 16. My Pickups (`myPickups`) — Volunteer / Food
+Returns all pickups assigned to the logged-in volunteer.
 
 - **Role Required**: `VOLUNTEER`
 - **Method**: `GET` (or `POST`)
@@ -433,24 +473,114 @@ Returns pickups assigned to the logged-in volunteer.
 - **Response Fields**: Array of:
   - `pickup_id`: number
   - `food_name`: string
+  - `quantity_claimed`: number
   - `pickup_status`: string
-  - `pickup_from`: string
-  - `deliver_to`: string
+  - `pickup_from`: string (donor address)
+  - `deliver_to`: string (recipient address)
+  - `slot_date`: string | null
+  - `start_time`: string | null
+  - `end_time`: string | null
+  - `delivered_at`: ISO timestamp | null
 
-### 16. Deliver Pickup (`deliver`)
-Marks an assigned pickup as delivered. Triggers claim completion and impact record generation.
+### 17. Waste Jobs (`wasteJobs`) — Volunteer / Waste
+Returns all unassigned waste routings available for collection.
+
+- **Role Required**: `VOLUNTEER` with `vrole` `WASTE_ONLY` or `DUAL`
+- **Method**: `GET` (or `POST`)
+- **Query Parameter**: `a=wasteJobs`
+- **Filtering**: `status = 'PENDING'` and `collection_id IS NULL`
+- **Response Fields**: Array of:
+  - `waste_id`: number (`routing_id`)
+  - `food_name`: string
+  - `donor_address`: string
+  - `quantity_kg`: number
+  - `condition_grade`: string (`ANIMAL_OK` or `BIOGAS_ONLY`)
+  - `route_type`: string (partner type)
+  - `partner_id`: number
+  - `partner_name`: string
+  - `partner_address`: string
+
+### 18. Waste Slots (`wasteSlots`) — Volunteer / Waste
+Returns available waste-run slots for this volunteer. Calls `sp_ensure_slots(7)` first.
+
+- **Role Required**: `VOLUNTEER` with `vrole` `WASTE_ONLY` or `DUAL`
+- **Method**: `GET` (or `POST`)
+- **Query Parameter**: `a=wasteSlots`
+- **Filtering**: `run_type = 'WASTE'`, `slot_date >= CURDATE()`, `TIMESTAMP(slot_date, start_time) > NOW()`, free capacity (WASTE_COLLECTION count < capacity), `fn_volunteer_slot_conflict = 0`
+- **Response Fields**: Array of:
+  - `slot_id`: number
+  - `slot_date`: string
+  - `start_time`: string
+  - `end_time`: string
+  - `capacity`: number
+  - `booked`: number (current booking count)
+
+### 19. Containers (`containers`) — Volunteer / Waste
+Returns all waste containers available for waste collection runs.
 
 - **Role Required**: `VOLUNTEER`
+- **Method**: `GET` (or `POST`)
+- **Query Parameter**: `a=containers`
+- **Response Fields**: Array of:
+  - `container_id`: number
+  - `container_label`: string
+  - `container_type`: string
+  - `capacity_kg`: number
+
+### 20. Collect Waste (`collect`) — Volunteer / Waste
+Records a waste collection run in a single transaction. All `waste_ids` must belong to the same partner. A database trigger marks each linked `WASTE_ROUTING` row as `COMPLETED`.
+
+- **Role Required**: `VOLUNTEER` with `vrole` `WASTE_ONLY` or `DUAL`
 - **Method**: `POST`
-- **Query Parameter**: `a=deliver`
+- **Query Parameter**: `a=collect`
 - **Request Body**:
   ```json
   {
-    "pickup_id": 8
+    "waste_ids": [3, 4, 5],
+    "slot_id": 7,
+    "container_id": 2,
+    "vehicle_no": "DL01AB1234",
+    "weighed_kg": 42.5
   }
   ```
+  - `waste_ids` (array of numbers, required): `WASTE_ROUTING.routing_id` values — must all share the same `partner_id` and have `status = 'PENDING'`.
+  - `slot_id` (number, required)
+  - `container_id` (number, required)
+  - `vehicle_no` (string, required)
+  - `weighed_kg` (number, required): Actual measured weight.
+- **Transaction steps**:
+  1. Validate all `waste_ids` share exactly one partner; rollback if not.
+  2. `INSERT WASTE_COLLECTION` with `source_type = 'DONOR_SITE'` and `receipt_ref = 'RCPT-<partner_id>-<timestamp>'`.
+  3. `UPDATE WASTE_ROUTING SET collection_id = <new id>` for all matching pending rows (trigger sets `status = 'COMPLETED'`).
 - **Response Fields**:
   - `ok`: number (`1`)
+  - `collection_id`: number
+  - `receipt_ref`: string
+
+### 21. My Collections (`myCollections`) — Volunteer / Waste
+Returns all waste collection runs completed by this volunteer.
+
+- **Role Required**: `VOLUNTEER`
+- **Method**: `GET` (or `POST`)
+- **Query Parameter**: `a=myCollections`
+- **Response Fields**: Array of:
+  - `collection_id`: number
+  - `partner_name`: string
+  - `weighed_kg`: number
+  - `receipt_ref`: string
+  - `collected_at`: ISO timestamp
+
+### 22. My Impact (`myImpact`) — Volunteer
+Returns this volunteer's cumulative delivery and waste impact. (Also available for `DONOR` §8 and `RECIPIENT` §12 with different shapes.)
+
+- **Role Required**: `VOLUNTEER`
+- **Method**: `GET` (or `POST`)
+- **Query Parameter**: `a=myImpact`
+- **Response Fields**:
+  - `deliveries_completed`: number
+  - `kg_delivered`: number
+  - `meals_delivered`: number
+  - `waste_kg_collected`: number
 
 ---
 
