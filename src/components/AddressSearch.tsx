@@ -8,7 +8,7 @@
  *   GET /api/geo?a=geocode&q=<address>   → { lat, lng }
  *   GET /api/hubs?a=nearest&lat=&lng=    → Hub[]
  */
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { MapPin, Loader2 } from "lucide-react";
 import type { Hub } from "@/lib/api";
 
@@ -16,12 +16,19 @@ interface GeoResult  { lat: number; lng: number }
 
 interface Props {
   onResult: (hubs: Hub[], coords: GeoResult) => void;
+  /** Optional initial value for the address input */
+  prefill?: string;
 }
 
-export default function AddressSearch({ onResult }: Props) {
-  const [query,  setQuery]  = useState("");
+export default function AddressSearch({ onResult, prefill }: Props) {
+  const [query,  setQuery]  = useState(prefill ?? "");
   const [busy,   setBusy]   = useState(false);
   const [error,  setError]  = useState<string | null>(null);
+
+  // Sync when prefill arrives after async profile load
+  useEffect(() => {
+    if (prefill && !query) setQuery(prefill);
+  }, [prefill]);
 
   const search = async () => {
     const q = query.trim();
