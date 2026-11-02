@@ -1,4 +1,4 @@
-const { pool, user, errJson, makeCode } = require("../lib/util");
+const { pool, user, errJson, makeCode, hash } = require("../lib/util");
 
 module.exports = async (req, res) => {
   const u = user(req);
@@ -241,47 +241,185 @@ module.exports = async (req, res) => {
           [u.pid]));
       }
 
-      // ── myImpact ────────────────────────────────────────────────────────────
-      case "myImpact": {
-        need("DONOR");
-        const [rows] = await pool.query(
-          "SELECT meals_saved, kg_diverted, co2_avoided_kg, trust_score FROM v_donor_impact WHERE donor_id=?",
-          [u.pid]);
-        return res.json(rows[0] || { meals_saved: 0, kg_diverted: 0, co2_avoided_kg: 0, trust_score: 0 });
-      }
-
       // ── feed ────────────────────────────────────────────────────────────────
       case "feed": {
         need("RECIPIENT");
+
+        // Check whether this recipient has cold storage
+        const [[recip]] = await pool.query(
+          "SELECT has_cold_storage FROM RECIPIENT WHERE recipient_id=?", [u.pid]);
+        const hasCold = recip && recip.has_cold_storage;
+
+        const hubFilter = req.query.hub_id ? " AND l.hub_id = ?" : "";
+        const feedParams = [u.pid, u.pid, hasCold ? 1 : 0];
+        if (req.query.hub_id) feedParams.push(Number(req.query.hub_id));
+
         return res.json(await q(
           `SELECT a.listing_id, a.food_name, a.donor_name, a.tags,
-                  a.quantity_remaining, a.quantity_unit, a.minutes_left, m.score
+                  a.quantity_remaining, a.quantity_unit, a.minutes_left,
+                  l.storage_type, l.hub_id, h.hub_name,
+                  m.score
            FROM v_active_listings a
-           LEFT JOIN MATCH_SCORE m ON m.listing_id = a.listing_id AND m.recipient_id = ?
+           JOIN FOOD_LISTING l ON l.listing_id = a.listing_id
+           LEFT JOIN HUB h ON h.hub_id = l.hub_id
+           LEFT JOIN MATCH_SCORE m
+             ON m.listing_id = a.listing_id AND m.recipient_id = ?
+           WHERE fn_listing_meets_needs(a.listing_id, ?) = 1
+             AND (l.storage_type NOT IN ('REFRIGERATED','FROZEN') OR ? = 1)
+             ${hubFilter}
            ORDER BY (m.score IS NULL), m.score DESC, a.minutes_left`,
-          [u.pid]));
+          feedParams
+        ));
       }
 
       // ── claim ────────────────────────────────────────────────────────────────
       case "claim": {
         need("RECIPIENT");
-        await pool.query(
-          "INSERT INTO CLAIM (listing_id, recipient_id, quantity_claimed) VALUES (?, ?, ?)",
-          [b.listing_id, u.pid, b.qty]);
-        return res.json({ ok: 1 });
+        const { listing_id, qty } = b;
+
+        const conn = await pool.getConnection();
+        try {
+          await conn.beginTransaction();
+
+          // Insert the claim
+          const [ins] = await conn.query(
+            "INSERT INTO CLAIM (listing_id, recipient_id, quantity_claimed) VALUES (?, ?, ?)",
+            [listing_id, u.pid, qty]);
+          const claimId = ins.insertId;
+
+          // Check if listing is routed through a hub
+          const [[listing]] = await conn.query(
+            "SELECT hub_id, storage_type, weight_per_unit_kg, expires_at FROM FOOD_LISTING WHERE listing_id=?",
+            [listing_id]);
+
+          if (!listing.hub_id) {
+            // Direct delivery — volunteer will handle it
+            await conn.commit();
+            return res.json({ claim_id: claimId, handover_id: null, hub_name: null, compartment: null, pickup_code: null });
+          }
+
+          // Hub listing — find a suitable compartment
+          const needsCold = ["REFRIGERATED", "FROZEN"].includes(listing.storage_type) ? 1 : 0;
+          const requiredKg = qty * listing.weight_per_unit_kg;
+
+          const [compartments] = await conn.query(
+            `SELECT vs.compartment_id, vs.label, vs.free_kg, h.hub_name
+             FROM v_hub_status vs
+             JOIN HUB h ON h.hub_id = vs.hub_id
+             WHERE vs.hub_id = ?
+               AND vs.temp_controlled = ?
+               AND vs.free_kg >= ?
+               AND vs.accepting = 1
+             ORDER BY vs.free_kg DESC
+             LIMIT 1`,
+            [listing.hub_id, needsCold, requiredKg]);
+
+          if (!compartments.length) {
+            await conn.rollback();
+            return res.status(400).json({ error: "This hub cannot take the food right now" });
+          }
+
+          const comp = compartments[0];
+          const codeExpiry = `LEAST(
+            (SELECT expires_at FROM FOOD_LISTING WHERE listing_id=${conn.escape(listing_id)}),
+            NOW() + INTERVAL 24 HOUR)`;
+
+          const [hins] = await conn.query(
+            `INSERT INTO HUB_HANDOVER
+              (claim_id, compartment_id, drop_code_hash, pickup_code_hash, code_expires_at)
+             VALUES (?, ?, ?, ?, LEAST(
+               (SELECT expires_at FROM FOOD_LISTING WHERE listing_id=?),
+               NOW() + INTERVAL 24 HOUR))`,
+            [claimId, comp.compartment_id,
+             hash(makeCode(claimId, "drop")),
+             hash(makeCode(claimId, "pickup")),
+             listing_id]);
+          const handoverId = hins.insertId;
+
+          await conn.commit();
+          return res.json({
+            claim_id: claimId,
+            handover_id: handoverId,
+            hub_name: comp.hub_name,
+            compartment: comp.label,
+            pickup_code: makeCode(claimId, "pickup")
+          });
+        } catch (e) {
+          await conn.rollback();
+          throw e;
+        } finally {
+          conn.release();
+        }
       }
 
       // ── myClaims ─────────────────────────────────────────────────────────────
       case "myClaims": {
         need("RECIPIENT");
-        return res.json(await q(
-          `SELECT c.claim_id, l.food_name, c.quantity_claimed, c.claim_status, p.pickup_status
+        const claims = await q(
+          `SELECT c.claim_id, l.food_name, d.donor_name, c.quantity_claimed,
+                  c.claim_status,
+                  p.pickup_status,
+                  v.volunteer_name,
+                  hh.handover_id, hh.status AS handover_status,
+                  h.hub_name, hc.label AS compartment_label
            FROM CLAIM c
            JOIN FOOD_LISTING l ON l.listing_id = c.listing_id
+           JOIN DONOR d ON d.donor_id = l.donor_id
            LEFT JOIN PICKUP p ON p.claim_id = c.claim_id
+           LEFT JOIN VOLUNTEER v ON v.volunteer_id = p.volunteer_id
+           LEFT JOIN HUB_HANDOVER hh ON hh.claim_id = c.claim_id
+           LEFT JOIN HUB_COMPARTMENT hc ON hc.compartment_id = hh.compartment_id
+           LEFT JOIN HUB h ON h.hub_id = hc.hub_id
            WHERE c.recipient_id = ?
            ORDER BY c.claim_id DESC`,
-          [u.pid]));
+          [u.pid]);
+
+        return res.json(claims.map(row => ({
+          claim_id: row.claim_id,
+          food_name: row.food_name,
+          donor_name: row.donor_name,
+          quantity_claimed: row.quantity_claimed,
+          claim_status: row.claim_status,
+          pickup_status: row.pickup_status,
+          volunteer_name: row.volunteer_name,
+          handover_id: row.handover_id,
+          handover_status: row.handover_status,
+          hub_name: row.hub_name,
+          compartment_label: row.compartment_label,
+          pickup_code: (row.handover_status === "AWAITING_DROP" || row.handover_status === "DROPPED")
+            ? makeCode(row.claim_id, "pickup")
+            : null
+        })));
+      }
+
+      // ── myImpact (RECIPIENT) — overrides the DONOR myImpact below via role check ──
+      case "myImpact": {
+        if (u.role === "RECIPIENT") {
+          // Count of COMPLETED claims and total kg/meals from IMPACT_RECORD
+          const [[summary]] = await pool.query(
+            `SELECT
+               COUNT(DISTINCT c.claim_id)                        AS claims_completed,
+               COALESCE(SUM(ir.quantity_kg), 0)                  AS kg_received,
+               COALESCE(SUM(ir.meals_equivalent), 0)             AS meals_received
+             FROM CLAIM c
+             LEFT JOIN PICKUP p
+               ON p.claim_id = c.claim_id
+             LEFT JOIN HUB_HANDOVER hh
+               ON hh.claim_id = c.claim_id
+             LEFT JOIN IMPACT_RECORD ir
+               ON ir.pickup_id = p.pickup_id
+               OR ir.handover_id = hh.handover_id
+             WHERE c.recipient_id = ?
+               AND c.claim_status = 'COMPLETED'`,
+            [u.pid]);
+          return res.json(summary);
+        }
+        // DONOR path falls through to the case below
+        need("DONOR");
+        const [rows] = await pool.query(
+          "SELECT meals_saved, kg_diverted, co2_avoided_kg, trust_score FROM v_donor_impact WHERE donor_id=?",
+          [u.pid]);
+        return res.json(rows[0] || { meals_saved: 0, kg_diverted: 0, co2_avoided_kg: 0, trust_score: 0 });
       }
 
       // ── jobs ─────────────────────────────────────────────────────────────────

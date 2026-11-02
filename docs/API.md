@@ -21,14 +21,15 @@ All endpoints are hosted as Vercel serverless functions under `/api`. Standard r
   - [Report Unfit (`reportUnfit`)](#5-report-unfit-reportunfit)
   - [My Listings (`myListings`)](#6-my-listings-mylistings)
   - [My Routings (`myRoutings`)](#7-my-routings-myroutings)
-  - [My Impact (`myImpact`)](#8-my-impact-myimpact)
+  - [My Impact — Donor (`myImpact`)](#8-my-impact-myimpact--donor)
   - [Active Feed (`feed`)](#9-active-feed-feed)
   - [Claim Listing (`claim`)](#10-claim-listing-claim)
   - [My Claims (`myClaims`)](#11-my-claims-myclaims)
-  - [Available Jobs & Slots (`jobs`)](#12-available-jobs--slots-jobs)
-  - [Accept Job (`accept`)](#13-accept-job-accept)
-  - [My Pickups (`myPickups`)](#14-my-pickups-mypickups)
-  - [Deliver Pickup (`deliver`)](#15-deliver-pickup-deliver)
+  - [My Impact — Recipient (`myImpact`)](#12-my-impact-myimpact--recipient)
+  - [Available Jobs & Slots (`jobs`)](#13-available-jobs--slots-jobs)
+  - [Accept Job (`accept`)](#14-accept-job-accept)
+  - [My Pickups (`myPickups`)](#15-my-pickups-mypickups)
+  - [Deliver Pickup (`deliver`)](#16-deliver-pickup-deliver)
 - [Hub Management (`/api/hubs`)](#hub-management-apihubs)
   - [List Hubs (`list`)](#1-list-hubs-list)
   - [Nearest Hubs (`nearest`)](#2-nearest-hubs-nearest)
@@ -299,7 +300,7 @@ Returns all waste routing records for the logged-in donor's listings.
   - `quantity_kg`: number
   - `status`: string
 
-### 8. My Impact (`myImpact`)
+### 8. My Impact (`myImpact`) — Donor
 Returns the donor's impact summary from the `v_donor_impact` view. Returns zeroed values if no impact row exists yet.
 
 - **Role Required**: `DONOR`
@@ -312,11 +313,15 @@ Returns the donor's impact summary from the `v_donor_impact` view. Returns zeroe
   - `trust_score`: number
 
 ### 9. Active Feed (`feed`)
-Returns active available listings sorted by match score for the authenticated recipient.
+Returns active listings that this recipient can actually receive, filtered by dietary compatibility and cold-storage capability.
 
 - **Role Required**: `RECIPIENT`
 - **Method**: `GET` (or `POST`)
 - **Query Parameter**: `a=feed`
+- **Optional Query Parameter**: `hub_id=<number>` — filter to listings at a specific hub.
+- **Filtering logic**:
+  - `fn_listing_meets_needs(listing_id, recipient_id) = 1` (diet/allergen compatibility).
+  - `storage_type NOT IN ('REFRIGERATED','FROZEN')` OR the recipient's `has_cold_storage = 1`.
 - **Response Fields**: Array of:
   - `listing_id`: number
   - `food_name`: string
@@ -325,10 +330,13 @@ Returns active available listings sorted by match score for the authenticated re
   - `quantity_remaining`: number
   - `quantity_unit`: string
   - `minutes_left`: number
+  - `storage_type`: string
+  - `hub_id`: number | null
+  - `hub_name`: string | null
   - `score`: number | null
 
 ### 10. Claim Listing (`claim`)
-Places a claim for surplus food. Triggers database validation (stock, capacity, expiry, diet restrictions).
+Places a claim for surplus food in a single transaction. For hub listings, also allocates a compartment and creates a `HUB_HANDOVER` row with hashed drop/pickup codes.
 
 - **Role Required**: `RECIPIENT`
 - **Method**: `POST`
@@ -340,11 +348,16 @@ Places a claim for surplus food. Triggers database validation (stock, capacity, 
     "qty": 5
   }
   ```
+- **Hub listings**: finds the best-fit compartment from `v_hub_status` where `temp_controlled` matches `REFRIGERATED`/`FROZEN` storage, `free_kg >= qty × weight_per_unit_kg`, and `accepting = 1` (most free first). Returns `400 { "error": "This hub cannot take the food right now" }` if none found.
 - **Response Fields**:
-  - `ok`: number (`1`)
+  - `claim_id`: number
+  - `handover_id`: number | null (null for non-hub listings)
+  - `hub_name`: string | null
+  - `compartment`: string | null (compartment label, e.g. `"A1"`)
+  - `pickup_code`: string | null (6-digit code — shown to recipient once; used at the kiosk to collect)
 
 ### 11. My Claims (`myClaims`)
-Returns claims made by the authenticated recipient.
+Returns all claims made by the authenticated recipient, including hub handover details and the pickup code when applicable.
 
 - **Role Required**: `RECIPIENT`
 - **Method**: `GET` (or `POST`)
@@ -352,11 +365,31 @@ Returns claims made by the authenticated recipient.
 - **Response Fields**: Array of:
   - `claim_id`: number
   - `food_name`: string
+  - `donor_name`: string
   - `quantity_claimed`: number
   - `claim_status`: string
-  - `pickup_status`: string | null
+  - `pickup_status`: string | null (volunteer delivery status)
+  - `volunteer_name`: string | null
+  - `handover_id`: number | null
+  - `handover_status`: string | null
+  - `hub_name`: string | null
+  - `compartment_label`: string | null
+  - `pickup_code`: string | null — 6-digit code (`makeCode(claim_id, 'pickup')`) **only** when `handover_status` is `AWAITING_DROP` or `DROPPED`; `null` otherwise.
 
-### 12. Available Jobs & Slots (`jobs`)
+### 12. My Impact (`myImpact`) — Recipient
+Returns this recipient's impact summary: count of completed claims, total kg received, and meals received, aggregated from `IMPACT_RECORD` rows linked via `PICKUP` or `HUB_HANDOVER`.
+
+- **Role Required**: `RECIPIENT`
+- **Method**: `GET` (or `POST`)
+- **Query Parameter**: `a=myImpact`
+- **Response Fields**:
+  - `claims_completed`: number
+  - `kg_received`: number
+  - `meals_received`: number
+
+> **Note**: `myImpact` also works for `DONOR` (see [§8](#8-my-impact-myimpact--donor)) — the response shape differs by role.
+
+### 13. Available Jobs & Slots (`jobs`)
 Returns unassigned delivery jobs and available delivery slots for volunteers.
 
 - **Role Required**: `VOLUNTEER`
@@ -375,7 +408,7 @@ Returns unassigned delivery jobs and available delivery slots for volunteers.
     - `start_time`: string
     - `pickup_area`: string
 
-### 13. Accept Job (`accept`)
+### 14. Accept Job (`accept`)
 Assigns a volunteer to a delivery claim and delivery slot.
 
 - **Role Required**: `VOLUNTEER`
@@ -391,7 +424,7 @@ Assigns a volunteer to a delivery claim and delivery slot.
 - **Response Fields**:
   - `ok`: number (`1`)
 
-### 14. My Pickups (`myPickups`)
+### 15. My Pickups (`myPickups`)
 Returns pickups assigned to the logged-in volunteer.
 
 - **Role Required**: `VOLUNTEER`
@@ -404,7 +437,7 @@ Returns pickups assigned to the logged-in volunteer.
   - `pickup_from`: string
   - `deliver_to`: string
 
-### 15. Deliver Pickup (`deliver`)
+### 16. Deliver Pickup (`deliver`)
 Marks an assigned pickup as delivered. Triggers claim completion and impact record generation.
 
 - **Role Required**: `VOLUNTEER`
