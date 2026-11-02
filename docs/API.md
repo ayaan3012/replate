@@ -14,16 +14,21 @@ All endpoints are hosted as Vercel serverless functions under `/api`. Standard r
 - [Geolocation Services (`/api/geo`)](#geolocation-services-apigeo)
   - [Geocode Address (`geocode`)](#1-geocode-address-geocode)
 - [Data & Operations (`/api/data`)](#data--operations-apidata)
-  - [Categories (`categories`)](#1-categories-categories)
-  - [My Listings (`myListings`)](#2-my-listings-mylistings)
-  - [Add Listing (`addListing`)](#3-add-listing-addlisting)
-  - [Active Feed (`feed`)](#4-active-feed-feed)
-  - [Claim Listing (`claim`)](#5-claim-listing-claim)
-  - [My Claims (`myClaims`)](#6-my-claims-myclaims)
-  - [Available Jobs & Slots (`jobs`)](#7-available-jobs--slots-jobs)
-  - [Accept Job (`accept`)](#8-accept-job-accept)
-  - [My Pickups (`myPickups`)](#9-my-pickups-mypickups)
-  - [Deliver Pickup (`deliver`)](#10-deliver-pickup-deliver)
+  - [Profile (`profile`)](#1-profile-profile)
+  - [Categories (`categories`)](#2-categories-categories)
+  - [Tags (`tags`)](#3-tags-tags)
+  - [Add Listing (`addListing`)](#4-add-listing-addlisting)
+  - [Report Unfit (`reportUnfit`)](#5-report-unfit-reportunfit)
+  - [My Listings (`myListings`)](#6-my-listings-mylistings)
+  - [My Routings (`myRoutings`)](#7-my-routings-myroutings)
+  - [My Impact (`myImpact`)](#8-my-impact-myimpact)
+  - [Active Feed (`feed`)](#9-active-feed-feed)
+  - [Claim Listing (`claim`)](#10-claim-listing-claim)
+  - [My Claims (`myClaims`)](#11-my-claims-myclaims)
+  - [Available Jobs & Slots (`jobs`)](#12-available-jobs--slots-jobs)
+  - [Accept Job (`accept`)](#13-accept-job-accept)
+  - [My Pickups (`myPickups`)](#14-my-pickups-mypickups)
+  - [Deliver Pickup (`deliver`)](#15-deliver-pickup-deliver)
 - [Hub Management (`/api/hubs`)](#hub-management-apihubs)
   - [List Hubs (`list`)](#1-list-hubs-list)
   - [Nearest Hubs (`nearest`)](#2-nearest-hubs-nearest)
@@ -149,8 +154,21 @@ Geocodes an address string to latitude and longitude coordinates in India (`coun
 
 Requires authentication (`t` session cookie). Returns 401 if not logged in.
 
-### 1. Categories (`categories`)
-Returns all active food categories.
+### 1. Profile (`profile`)
+Returns the logged-in user's own profile fields.
+
+- **Role Required**: Any (`DONOR`, `RECIPIENT`, `VOLUNTEER`)
+- **Method**: `GET` (or `POST`)
+- **Query Parameter**: `a=profile`
+- **Response Fields**:
+  - `name`: string
+  - `address`: string
+  - `latitude`: number
+  - `longitude`: number
+  - `type`: string (role-specific type: `donor_type`, `recipient_type`, or `vehicle_type`)
+
+### 2. Categories (`categories`)
+Returns all food categories.
 
 - **Method**: `GET` (or `POST`)
 - **Query Parameter**: `a=categories`
@@ -158,22 +176,18 @@ Returns all active food categories.
   - `id`: number (`category_id`)
   - `name`: string (`category_name`)
 
-### 2. My Listings (`myListings`)
-Returns all listings created by the logged-in donor.
+### 3. Tags (`tags`)
+Returns all tags (diet and allergen).
 
-- **Role Required**: `DONOR`
 - **Method**: `GET` (or `POST`)
-- **Query Parameter**: `a=myListings`
+- **Query Parameter**: `a=tags`
 - **Response Fields**: Array of:
-  - `listing_id`: number
-  - `food_name`: string
-  - `status`: string
-  - `expires_at`: ISO timestamp string
-  - `quantity_unit`: string
-  - `quantity_remaining`: number
+  - `id`: number (`tag_id`)
+  - `name`: string (`tag_name`)
+  - `type`: string (`DIET` or `ALLERGEN`)
 
-### 3. Add Listing (`addListing`)
-Publishes a new surplus food listing, creates an initial passing visual safety check, and computes match scores.
+### 4. Add Listing (`addListing`)
+Publishes a new surplus food listing in a single transaction: inserts the listing, attaches diet and allergen tags, inserts an initial passing safety check (which fires the trigger to set status `AVAILABLE`), then calls `sp_compute_match_scores` after commit.
 
 - **Role Required**: `DONOR`
 - **Method**: `POST`
@@ -187,13 +201,117 @@ Publishes a new surplus food listing, creates an initial passing visual safety c
     "unit": "plates",
     "weight": 0.4,
     "hours": 4,
-    "storage": "HOT"
+    "storage": "HOT",
+    "is_sealed": false,
+    "hub_id": null,
+    "tag_ids": [3, 7],
+    "allergens": [
+      { "tag_id": 12, "contains": true },
+      { "tag_id": 15, "contains": false }
+    ]
   }
   ```
+  - `category_id` (number, required)
+  - `food_name` (string, required)
+  - `qty` (number, required): Total quantity.
+  - `unit` (string, required): Unit label (e.g. `"plates"`, `"kg"`).
+  - `weight` (number, required): Weight per unit in kg.
+  - `hours` (number, required): Hours until expiry (`expires_at = NOW() + INTERVAL hours HOUR`).
+  - `storage` (string, required): `"HOT"`, `"AMBIENT"`, or `"REFRIGERATED"`. **`"HOT"` is rejected for hub listings.**
+  - `is_sealed` (boolean, optional): Whether units are sealed. Forced to `true` for hub listings.
+  - `hub_id` (number, optional): Hub to route the food through. If provided, `storage` must not be `"HOT"` and `is_sealed` is forced to `1`.
+  - `tag_ids` (array of numbers, optional): Diet tag IDs — inserted into `LISTING_TAG` with `contains_flag=1`.
+  - `allergens` (array, optional): Each element `{ tag_id, contains: true|false }` — inserted with the given `contains_flag`.
+- **Safety check**: `VISUAL` for direct donations; `SEAL` for hub listings. Stage is `LISTING`, result is `PASS`.
 - **Response Fields**:
   - `id`: number (Created `listing_id`)
 
-### 4. Active Feed (`feed`)
+### 5. Report Unfit (`reportUnfit`)
+Records food that is not fit for human consumption and routes it to the best available partner. Runs in a single transaction.
+
+- **Role Required**: `DONOR`
+- **Method**: `POST`
+- **Query Parameter**: `a=reportUnfit`
+- **Request Body**:
+  ```json
+  {
+    "category_id": 2,
+    "food_name": "Stale bread",
+    "qty": 30,
+    "unit": "loaves",
+    "weight": 0.3,
+    "grade": "ANIMAL_OK"
+  }
+  ```
+  - `category_id` (number, required)
+  - `food_name` (string, required)
+  - `qty` (number, required)
+  - `unit` (string, required)
+  - `weight` (number, required): kg per unit.
+  - `grade` (string, required): `"ANIMAL_OK"` or `"BIOGAS_ONLY"`.
+- **Partner selection** (`kg = qty × weight`):
+  - `ANIMAL_OK` → `fn_pick_partner('FARM', category_id, kg)`, fallback `fn_pick_partner('ANIMAL_SHELTER', category_id, kg)`.
+  - `BIOGAS_ONLY` → `fn_pick_partner('BIOGAS', category_id, kg)`.
+  - If no partner is found, the transaction is rolled back and `400 { "error": "No partner accepts this food right now" }` is returned.
+- **Transaction steps**:
+  1. `INSERT FOOD_LISTING` (storage `AMBIENT`, `ready_at = NOW()-2h`, `expires_at = NOW()-1h`).
+  2. `INSERT WASTE_ROUTING` (listing_id, route_type from partner's `partner_type`, partner_id, grade, kg).
+  3. `UPDATE FOOD_LISTING SET status='ROUTED'`.
+- **Response Fields**:
+  - `partner_name`: string
+  - `route_type`: string (the partner's `partner_type`)
+  - `kg`: number
+
+### 6. My Listings (`myListings`)
+Returns all listings created by the logged-in donor, including hub handover details for hub listings.
+
+- **Role Required**: `DONOR`
+- **Method**: `GET` (or `POST`)
+- **Query Parameter**: `a=myListings`
+- **Response Fields**: Array of:
+  - `listing_id`: number
+  - `food_name`: string
+  - `status`: string
+  - `expires_at`: ISO timestamp string
+  - `quantity_unit`: string
+  - `quantity_remaining`: number (from `v_listing_remaining`)
+  - `storage_type`: string
+  - `hub_name`: string | null
+  - `handovers`: Array (empty for non-hub listings), each element:
+    - `handover_id`: number
+    - `claim_id`: number
+    - `recipient_name`: string
+    - `quantity_claimed`: number
+    - `status`: string
+    - `compartment_label`: string
+    - `drop_code`: string | null — 6-digit code (from `makeCode(claim_id, 'drop')`) **only** when status is `AWAITING_DROP`; `null` otherwise.
+
+### 7. My Routings (`myRoutings`)
+Returns all waste routing records for the logged-in donor's listings.
+
+- **Role Required**: `DONOR`
+- **Method**: `GET` (or `POST`)
+- **Query Parameter**: `a=myRoutings`
+- **Response Fields**: Array of:
+  - `food_name`: string
+  - `route_type`: string (partner type)
+  - `partner_name`: string
+  - `quantity_kg`: number
+  - `status`: string
+
+### 8. My Impact (`myImpact`)
+Returns the donor's impact summary from the `v_donor_impact` view. Returns zeroed values if no impact row exists yet.
+
+- **Role Required**: `DONOR`
+- **Method**: `GET` (or `POST`)
+- **Query Parameter**: `a=myImpact`
+- **Response Fields**:
+  - `meals_saved`: number
+  - `kg_diverted`: number
+  - `co2_avoided_kg`: number
+  - `trust_score`: number
+
+### 9. Active Feed (`feed`)
 Returns active available listings sorted by match score for the authenticated recipient.
 
 - **Role Required**: `RECIPIENT`
@@ -209,7 +327,7 @@ Returns active available listings sorted by match score for the authenticated re
   - `minutes_left`: number
   - `score`: number | null
 
-### 5. Claim Listing (`claim`)
+### 10. Claim Listing (`claim`)
 Places a claim for surplus food. Triggers database validation (stock, capacity, expiry, diet restrictions).
 
 - **Role Required**: `RECIPIENT`
@@ -225,7 +343,7 @@ Places a claim for surplus food. Triggers database validation (stock, capacity, 
 - **Response Fields**:
   - `ok`: number (`1`)
 
-### 6. My Claims (`myClaims`)
+### 11. My Claims (`myClaims`)
 Returns claims made by the authenticated recipient.
 
 - **Role Required**: `RECIPIENT`
@@ -238,7 +356,7 @@ Returns claims made by the authenticated recipient.
   - `claim_status`: string
   - `pickup_status`: string | null
 
-### 7. Available Jobs & Slots (`jobs`)
+### 12. Available Jobs & Slots (`jobs`)
 Returns unassigned delivery jobs and available delivery slots for volunteers.
 
 - **Role Required**: `VOLUNTEER`
@@ -257,7 +375,7 @@ Returns unassigned delivery jobs and available delivery slots for volunteers.
     - `start_time`: string
     - `pickup_area`: string
 
-### 8. Accept Job (`accept`)
+### 13. Accept Job (`accept`)
 Assigns a volunteer to a delivery claim and delivery slot.
 
 - **Role Required**: `VOLUNTEER`
@@ -273,7 +391,7 @@ Assigns a volunteer to a delivery claim and delivery slot.
 - **Response Fields**:
   - `ok`: number (`1`)
 
-### 9. My Pickups (`myPickups`)
+### 14. My Pickups (`myPickups`)
 Returns pickups assigned to the logged-in volunteer.
 
 - **Role Required**: `VOLUNTEER`
@@ -286,7 +404,7 @@ Returns pickups assigned to the logged-in volunteer.
   - `pickup_from`: string
   - `deliver_to`: string
 
-### 10. Deliver Pickup (`deliver`)
+### 15. Deliver Pickup (`deliver`)
 Marks an assigned pickup as delivered. Triggers claim completion and impact record generation.
 
 - **Role Required**: `VOLUNTEER`
