@@ -13,9 +13,11 @@ export default defineConfig({
     outDir: "dist",
   },
   server: {
-    // proxy API calls to the Vercel dev server (same origin in vercel dev)
-    proxy: {
-      "/api": { target: "http://localhost:3000", changeOrigin: true },
-    },
+    // Vercel dev injects PORT; fall back to 5173 for plain `npm run dev`
+    port: Number(process.env.PORT) || 5173,
+    strictPort: true,
+    // No /api proxy here: when running under `vercel dev` the outer Vercel
+    // process handles /api routing itself. When running plain `npm run dev`
+    // you'd need the proxy, but smoke tests always use `vercel dev`.
   },
 });
