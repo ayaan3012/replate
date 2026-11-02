@@ -3,14 +3,14 @@ import { useNavigate } from "react-router-dom";
 import { call, type Role, type AuthResponse } from "@/lib/api";
 import { useAuth } from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
-import RoleTab from "@/components/RoleTab";
+import { SlideTabs } from "@/components/ui/slide-tabs";
 
 // ─── Static config ────────────────────────────────────────────────────────────
 
 const TABS = [
-  { role: "DONOR"     as Role, label: "Donate food" },
-  { role: "RECIPIENT" as Role, label: "Take food"   },
-  { role: "VOLUNTEER" as Role, label: "Volunteer"   },
+  { id: "DONOR"     as Role, label: "Donate food" },
+  { id: "RECIPIENT" as Role, label: "Take food"   },
+  { id: "VOLUNTEER" as Role, label: "Volunteer"   },
 ];
 
 const BLURBS: Record<Role, string> = {
@@ -171,7 +171,12 @@ export default function Home() {
       </div>
 
       {/* ── Role slider ─────────────────────────────────────────────────────── */}
-      <RoleTab tabs={TABS} selected={role} onChange={r => { setRole(r); setMode("login"); }} />
+      <SlideTabs
+        tabs={TABS}
+        selected={role}
+        onChange={id => { setRole(id as Role); setMode("login"); }}
+        className="mx-auto"
+      />
 
       <p className="mt-3 mb-6 text-sm text-muted text-center min-h-[1.4em]">
         {BLURBS[role]}

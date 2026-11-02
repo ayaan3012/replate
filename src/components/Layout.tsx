@@ -1,14 +1,13 @@
 import type { ReactNode } from "react";
 import Nav from "@/components/Nav";
+import AboutDialog from "@/components/AboutDialog";
 
 interface Props {
   children: ReactNode;
-  /** Slot in the bottom-left corner — reserved for an "About us" button. */
-  bottomLeft?: ReactNode;
 }
 
 /**
- * Shared page shell.
+ * Shared page shell — used by App.tsx for every route.
  *
  *  ┌─────────────────────────────────────────┐
  *  │ 6 px gradient accent bar (fixed, top)   │
@@ -16,25 +15,24 @@ interface Props {
  *  │                                         │
  *  │   <main>  ← page content               │
  *  │                                         │
- *  │ [bottomLeft slot]          (fixed BL)   │
+ *  │ [About us]         (fixed bottom-left)  │
+ *  │              [Toast stack] (bottom-right)│
  *  └─────────────────────────────────────────┘
  */
-export default function Layout({ children, bottomLeft }: Props) {
+export default function Layout({ children }: Props) {
   return (
     <>
       <Nav />
 
-      {/* pt-6 clears the 6 px top accent bar; pb-20 keeps content above bottom slot */}
-      <main className="pt-6 pb-20 max-w-4xl mx-auto px-4">
+      {/* pt-6 clears the 6 px top accent bar; pb-24 keeps content above bottom controls */}
+      <main className="pt-6 pb-24 max-w-4xl mx-auto px-4">
         {children}
       </main>
 
-      {/* Bottom-left slot — empty until an "About us" button is added */}
-      {bottomLeft && (
-        <div className="fixed bottom-4 left-4 z-30">
-          {bottomLeft}
-        </div>
-      )}
+      {/* "About us" button — fixed bottom-left on every page */}
+      <div className="fixed bottom-4 left-4 z-30">
+        <AboutDialog />
+      </div>
     </>
   );
 }
