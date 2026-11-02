@@ -1,5 +1,8 @@
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import Nav from "@/components/Nav";
+import { AuthProvider } from "@/context/AuthContext";
+import { ToastProvider } from "@/context/ToastContext";
+import Layout from "@/components/Layout";
+import RequireRole from "@/components/RequireRole";
 import Home from "@/pages/Home";
 import Donor from "@/pages/Donor";
 import Order from "@/pages/Order";
@@ -9,17 +12,43 @@ import Hub from "@/pages/Hub";
 export default function App() {
   return (
     <BrowserRouter>
-      <Nav />
-      {/* pt-6 clears the 6px top accent bar */}
-      <main className="pt-6 max-w-4xl mx-auto px-4 pb-16">
-        <Routes>
-          <Route path="/"          element={<Home />} />
-          <Route path="/donor"     element={<Donor />} />
-          <Route path="/order"     element={<Order />} />
-          <Route path="/volunteer" element={<Volunteer />} />
-          <Route path="/hub"       element={<Hub />} />
-        </Routes>
-      </main>
+      <AuthProvider>
+        <ToastProvider>
+          <Layout>
+            <Routes>
+              {/* Public */}
+              <Route path="/"    element={<Home />} />
+              <Route path="/hub" element={<Hub />} />
+
+              {/* Role-guarded */}
+              <Route
+                path="/donor"
+                element={
+                  <RequireRole role="DONOR">
+                    <Donor />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="/order"
+                element={
+                  <RequireRole role="RECIPIENT">
+                    <Order />
+                  </RequireRole>
+                }
+              />
+              <Route
+                path="/volunteer"
+                element={
+                  <RequireRole role="VOLUNTEER">
+                    <Volunteer />
+                  </RequireRole>
+                }
+              />
+            </Routes>
+          </Layout>
+        </ToastProvider>
+      </AuthProvider>
     </BrowserRouter>
   );
 }
