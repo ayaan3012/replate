@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Surplus Food Rescue Network</title>
+<style>
+:root{--bg:#fff;--card:#fff;--ink:#14143a;--mute:#5b5f7a;--line:#e4e6f2;--pink:#e6007a;--pinkx:#ffe6f3;--blue:#0a5cff;--bluex:#e6f0ff;--glowp:0 0 14px rgba(255,0,140,.45);--glowb:0 0 14px rgba(0,120,255,.4);color-scheme:light}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}
+body::before{content:"";display:block;height:6px;background:linear-gradient(90deg,#ff2e9a,#00b4ff)}
+main{max-width:900px;margin:0 auto;padding:20px 16px 48px}
+h1{font-size:clamp(26px,5vw,40px);margin:0 0 6px;letter-spacing:-.02em;background:linear-gradient(90deg,var(--pink),var(--blue));-webkit-background-clip:text;background-clip:text;color:transparent;width:fit-content}
+h2{margin:24px 0 10px}h3{margin:0}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px}.sub,.meta{color:var(--mute)}.meta{font-size:14px;margin:4px 0}
+.roles{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;margin:16px 0}
+.role{all:unset;cursor:pointer;background:var(--card);border:2px solid var(--line);border-radius:14px;padding:14px}.role:hover{border-color:var(--blue)}.role b{display:block;font-size:18px}.role small{color:var(--mute)}
+.role[aria-pressed=true]{border-color:var(--pink);background:var(--pinkx);box-shadow:var(--glowp)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px;box-shadow:0 2px 12px rgba(10,92,255,.08)}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}.grid .card{margin:0}.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}
+label{display:block;font-size:14px;font-weight:600;margin-bottom:10px}input,select{width:100%;margin-top:4px;padding:10px;border:1px solid #c9cdea;border-radius:8px;background:#fff;color:var(--ink);font:inherit}input:focus,select:focus{border-color:var(--pink)}
+.btn{cursor:pointer;border:2px solid var(--pink);border-radius:9px;padding:10px 16px;font:600 15px system-ui;background:var(--pink);color:#fff;box-shadow:var(--glowp)}.btn:hover{filter:brightness(1.08)}
+.btn.alt{background:#fff;color:var(--blue);border-color:var(--blue);box-shadow:none}.btn.alt:hover{box-shadow:var(--glowb)}
+.seg{display:flex;gap:6px;margin-bottom:12px}.seg button{all:unset;cursor:pointer;padding:6px 14px;border:1px solid var(--line);border-radius:99px}.seg [aria-pressed=true]{background:var(--bluex);border-color:var(--blue);color:var(--blue);font-weight:600}
+.err{color:#d00000;min-height:1.4em}.row2{display:flex;gap:8px;margin-top:8px}.row2 input{width:80px;margin:0}.empty{color:var(--mute)}
+.tw{overflow-x:auto}table{border-collapse:collapse;width:100%;font-size:14px;background:#fff}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);white-space:nowrap}th{background:var(--bluex);color:var(--blue)}
+button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--blue);outline-offset:2px}
+</style></head>
+<body><main id="app"></main>
+<script>
+const $=s=>document.querySelector(s),esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const call=async(f,a,b)=>{const r=await fetch(`/api/${f}?a=${a}`,b?{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(b)}:{});const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||"Something went wrong");return j};
+const ROLES={DONOR:["Donate food","I have surplus food to give"],RECIPIENT:["Order food","I need food for people"],VOLUNTEER:["Volunteer","I can deliver food"]};
+const TYPES={DONOR:["RESTAURANT","HOTEL","CATERER","EVENT_ORGANISER","SHOP"],RECIPIENT:["NGO","SHELTER","ORPHANAGE","COMMUNITY_KITCHEN","OLD_AGE_HOME"],VOLUNTEER:["WALK","BIKE","SCOOTER","CAR","VAN"]};
+let role="RECIPIENT",mode="login",U=null;
+const msg=t=>{const m=$("#msg");if(m)m.textContent=t};
+const opts=a=>a.map(o=>`<option>${o}</option>`).join("");
+const tbl=(h,r)=>r.length?`<div class="tw"><table><thead><tr>${h.map(x=>`<th>${x}</th>`).join("")}</tr></thead><tbody>${r.map(a=>`<tr>${a.map(c=>`<td>${c}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`:'<p class="empty">Nothing here yet.</p>';
+function loginView(){
+ $("#app").innerHTML=`<h1>Surplus Food Rescue</h1><p class="sub">Choose how you want to use the network, then log in.</p>
+ <div class="roles">${Object.entries(ROLES).map(([k,v])=>`<button class="role" data-role="${k}" aria-pressed="${k===role}"><b>${v[0]}</b><small>${v[1]}</small></button>`).join("")}</div>
+ <form id="af" class="card"><div class="seg"><button type="button" data-mode="login" aria-pressed="${mode==="login"}">Log in</button><button type="button" data-mode="register" aria-pressed="${mode==="register"}">Register</button></div>
+ ${mode==="register"?`<label>Name<input name="name" required></label><label>Phone<input name="phone" required></label><label>${role==="VOLUNTEER"?"Vehicle":"Type"}<select name="type">${opts(TYPES[role])}</select></label>${role==="VOLUNTEER"?"":'<label>Address<input name="address" required></label>'}`:""}
+ <label>Email<input name="email" type="email" required></label><label>Password<input name="password" type="password" minlength="6" required></label>
+ <button class="btn">${mode==="login"?"Log in":"Create account"}</button><p id="msg" class="err" role="alert"></p></form>`;
+}
+async function dash(){
+ $("#app").innerHTML=`<header><h1>${ROLES[U.role][0]}</h1><button class="btn alt" data-out>Log out</button></header><div id="main"></div><p id="msg" class="err" role="alert"></p>`;
+ await ({DONOR:donor,RECIPIENT:recip,VOLUNTEER:vol})[U.role]();
+}
+async function donor(){
+ const [cats,ls]=await Promise.all([call("data","categories"),call("data","myListings")]);
+ $("#main").innerHTML=`<form id="lf" class="card"><h2>List surplus food</h2><div class="row"><label>Food<input name="food_name" required></label><label>Category<select name="category_id">${cats.map(c=>`<option value="${c.id}">${esc(c.name)}</option>`).join("")}</select></label><label>Quantity<input name="qty" type="number" min="1" value="10" required></label><label>Unit<select name="unit">${opts(["plates","packets","kg"])}</select></label><label>Kg per unit<input name="weight" type="number" step="0.05" min="0.05" value="0.4" required></label><label>Expires in (hours)<input name="hours" type="number" min="1" value="4" required></label><label>Storage<select name="storage">${opts(["HOT","AMBIENT","REFRIGERATED"])}</select></label></div><button class="btn">Publish listing</button></form>
+ <h2>Your listings</h2>${tbl(["Food","Left","Status","Expires"],ls.map(l=>[esc(l.food_name),l.quantity_remaining+" "+esc(l.quantity_unit),l.status,new Date(l.expires_at).toLocaleString()]))}`;
+}
+async function recip(){
+ const [f,c]=await Promise.all([call("data","feed"),call("data","myClaims")]);
+ $("#main").innerHTML=`<h2>Food available</h2><div class="grid">${f.length?f.map(l=>`<article class="card"><h3>${esc(l.food_name)}</h3><p class="meta">${esc(l.donor_name)} · ${esc(l.tags||"no tags")}</p><p class="meta">${l.quantity_remaining} ${esc(l.quantity_unit)} left · ${(l.minutes_left/60).toFixed(1)} h to expiry${l.score!=null?" · match score "+l.score:""}</p><div class="row2"><input type="number" min="1" max="${l.quantity_remaining}" value="1" aria-label="Quantity" id="q${l.listing_id}"><button class="btn" data-claim="${l.listing_id}">Order</button></div></article>`).join(""):'<p class="empty">No food available right now.</p>'}</div>
+ <h2>Your orders</h2>${tbl(["Food","Qty","Claim","Delivery"],c.map(x=>[esc(x.food_name),x.quantity_claimed,x.claim_status,x.pickup_status||"Waiting for a volunteer"]))}`;
+}
+async function vol(){
+ const [j,p]=await Promise.all([call("data","jobs"),call("data","myPickups")]);
+ $("#main").innerHTML=`<h2>Open deliveries</h2><div class="grid">${j.jobs.length?j.jobs.map(x=>`<article class="card"><h3>${esc(x.food_name)} × ${x.quantity_claimed}</h3><p class="meta">From ${esc(x.pickup_from)}<br>To ${esc(x.deliver_to)}</p>${j.slots.length?`<select id="s${x.claim_id}" aria-label="Delivery slot">${j.slots.map(s=>`<option value="${s.slot_id}">${esc(s.pickup_area)}, ${String(s.slot_date).slice(0,10)} ${esc(s.start_time)}</option>`).join("")}</select><div class="row2"><button class="btn" data-accept="${x.claim_id}">Accept</button></div>`:'<p class="meta">No free delivery slots.</p>'}</article>`).join(""):'<p class="empty">No deliveries waiting.</p>'}</div>
+ <h2>Your deliveries</h2>${tbl(["Food","From","To","Status",""],p.map(x=>[esc(x.food_name),esc(x.pickup_from),esc(x.deliver_to),x.pickup_status,x.pickup_status==="DELIVERED"?"":`<button class="btn alt" data-deliver="${x.pickup_id}">Mark delivered</button>`]))}`;
+}
+document.addEventListener("click",async e=>{const t=e.target.closest("button");if(!t)return;const d=t.dataset;
+ try{
+  if(d.role){role=d.role;return loginView()}
+  if(d.mode){mode=d.mode;return loginView()}
+  if(d.out!==undefined){await call("auth","logout",{});U=null;return loginView()}
+  if(d.claim){await call("data","claim",{listing_id:d.claim,qty:$("#q"+d.claim).value});return dash()}
+  if(d.accept){await call("data","accept",{claim_id:d.accept,slot_id:$("#s"+d.accept).value});return dash()}
+  if(d.deliver){await call("data","deliver",{pickup_id:d.deliver});return dash()}
+ }catch(err){msg(err.message)}});
+document.addEventListener("submit",async e=>{e.preventDefault();const f=e.target,v=Object.fromEntries(new FormData(f));
+ try{
+  if(f.id==="af"){U=(await call("auth",mode,{...v,role})).user;return dash()}
+  if(f.id==="lf"){await call("data","addListing",v);return dash()}
+ }catch(err){msg(err.message)}});
+call("auth","me").then(r=>{U=r.user;U?dash():loginView()}).catch(loginView);
+</script></body></html>

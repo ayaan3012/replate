@@ -1,0 +1,19 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Top accent bar — matches the original design */
+body::before {
+  content: "";
+  display: block;
+  height: 6px;
+  background: linear-gradient(90deg, #e6007a, #0a5cff);
+  position: fixed;
+  top: 0;
+  inset-inline: 0;
+  z-index: 50;
+}
+
+/* Leaflet z-index fix inside modals */
+.leaflet-pane { z-index: 10; }
+.leaflet-top, .leaflet-bottom { z-index: 11; }
