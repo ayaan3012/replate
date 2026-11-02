@@ -10,7 +10,7 @@ const links = [
 
 export default function Nav() {
   return (
-    <nav className="mt-6 border-b border-brand-line bg-brand-white sticky top-6 z-20">
+    <nav className="mt-6 border-b border-border bg-white sticky top-6 z-20">
       <div className="max-w-4xl mx-auto px-4 flex items-center gap-1 overflow-x-auto">
         {links.map(({ to, label }) => (
           <NavLink
@@ -21,8 +21,8 @@ export default function Nav() {
               [
                 "py-3 px-4 text-sm font-semibold whitespace-nowrap border-b-2 -mb-px transition-colors",
                 isActive
-                  ? "border-brand-pink text-brand-pink"
-                  : "border-transparent text-brand-muted hover:text-brand-ink",
+                  ? "border-pink text-pink"
+                  : "border-transparent text-muted hover:text-ink",
               ].join(" ")
             }
           >

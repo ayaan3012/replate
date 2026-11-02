@@ -20,8 +20,8 @@
 export default function Volunteer() {
   return (
     <div className="mt-8">
-      <h1 className="text-2xl font-bold text-brand-ink mb-1">Volunteer dashboard</h1>
-      <p className="text-brand-muted mb-6">
+      <h1 className="text-2xl font-bold text-ink mb-1">Volunteer dashboard</h1>
+      <p className="text-muted mb-6">
         Pick up food deliveries or run waste collections — depending on your role.
       </p>
 
@@ -34,10 +34,10 @@ export default function Volunteer() {
         ].map((item) => (
           <div
             key={item.label}
-            className="rounded-2xl border border-brand-line bg-brand-white p-5 shadow-sm"
+            className="rounded-2xl border border-border bg-white p-5 shadow-sm"
           >
-            <h2 className="font-semibold text-brand-ink mb-1">{item.label}</h2>
-            <p className="text-sm text-brand-muted">{item.desc}</p>
+            <h2 className="font-semibold text-ink mb-1">{item.label}</h2>
+            <p className="text-sm text-muted">{item.desc}</p>
           </div>
         ))}
       </div>

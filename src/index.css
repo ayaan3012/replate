@@ -2,18 +2,88 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Top accent bar — matches the original design */
+/* ─── Design tokens ──────────────────────────────────────────────────────────
+   Single source of truth. Every colour, radius, and shadow used in the app
+   lives here. Tailwind tokens (tailwind.config.ts) reference these via var().
+   To retheme the entire app change only this block.
+   ──────────────────────────────────────────────────────────────────────────── */
+:root {
+  /* Palette */
+  --color-bg:      #ffffff;
+  --color-pink:    #e6007a;   /* primary action / brand */
+  --color-blue:    #0a5cff;   /* secondary / info */
+  --color-ink:     #14143a;   /* body text */
+  --color-muted:   #5b5f7a;   /* secondary text, placeholders */
+  --color-border:  #e4e6f2;   /* card borders, dividers */
+  --color-error:   #d00000;   /* destructive / validation */
+  --color-success: #0a8f4d;   /* confirmation / positive */
+
+  /* Tints (10 % opacity fills for badges, tags, hover states) */
+  --color-pink-tint:    #ffe6f3;
+  --color-blue-tint:    #e6f0ff;
+  --color-error-tint:   #fff0f0;
+  --color-success-tint: #edfbf3;
+
+  /* Radius scale */
+  --radius-sm:  6px;
+  --radius-md:  12px;
+  --radius-lg:  18px;
+  --radius-xl:  24px;
+  --radius-full: 9999px;
+
+  /* Shadow scale */
+  --shadow-sm: 0 1px 3px rgba(20, 20, 58, 0.06), 0 1px 2px rgba(20, 20, 58, 0.04);
+  --shadow-md: 0 4px 12px rgba(20, 20, 58, 0.08), 0 2px 4px  rgba(20, 20, 58, 0.05);
+  --shadow-lg: 0 8px 24px rgba(20, 20, 58, 0.10), 0 4px 8px  rgba(20, 20, 58, 0.06);
+
+  /* Glow (used on focused primary/secondary controls) */
+  --glow-pink: 0 0 0 3px rgba(230, 0, 122, 0.20);
+  --glow-blue: 0 0 0 3px rgba(10,  92, 255, 0.20);
+
+  /* Typography */
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* ─── Base resets ────────────────────────────────────────────────────────────*/
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light;        /* force light, no OS dark-mode bleed */
+}
+
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Top accent bar ─────────────────────────────────────────────────────────*/
 body::before {
   content: "";
   display: block;
   height: 6px;
-  background: linear-gradient(90deg, #e6007a, #0a5cff);
+  background: linear-gradient(90deg, var(--color-pink), var(--color-blue));
   position: fixed;
   top: 0;
   inset-inline: 0;
   z-index: 50;
 }
 
-/* Leaflet z-index fix inside modals */
-.leaflet-pane { z-index: 10; }
-.leaflet-top, .leaflet-bottom { z-index: 11; }
+/* ─── Focus ring (accessible, on-brand) ─────────────────────────────────────*/
+:focus-visible {
+  outline: 3px solid var(--color-blue);
+  outline-offset: 2px;
+}
+
+/* ─── Leaflet z-index fix ────────────────────────────────────────────────────*/
+.leaflet-pane        { z-index: 10; }
+.leaflet-top,
+.leaflet-bottom      { z-index: 11; }
