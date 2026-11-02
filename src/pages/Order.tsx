@@ -1,38 +1,23 @@
-/**
- * Recipient / Order page — placeholder
- *
- * Will use these API actions (see docs/API.md):
- *   GET  /api/data?a=profile            → org name, address, cold-storage flag
- *   GET  /api/data?a=feed[&hub_id=]     → active listings filtered by dietary needs + cold storage
- *   POST /api/data?a=claim              → claim a listing {listing_id, qty}
- *   GET  /api/data?a=myClaims           → claims with handover codes and pickup status
- *   GET  /api/data?a=myImpact           → claims_completed, kg_received, meals_received
- *   GET  /api/hubs?a=list               → all hubs (for hub filter)
- */
+import DashboardShell from "@/components/DashboardShell";
+
+function Section({ id, title, desc }: { id: string; title: string; desc: string }) {
+  return (
+    <section id={id} className="scroll-mt-6 mb-10">
+      <h2 className="text-lg font-bold text-ink mb-1">{title}</h2>
+      <p className="text-sm text-muted mb-4">{desc}</p>
+      <div className="rounded-lg border border-border bg-white p-6 shadow-sm min-h-[120px] flex items-center justify-center">
+        <span className="text-sm text-muted">Coming soon</span>
+      </div>
+    </section>
+  );
+}
+
 export default function Order() {
   return (
-    <div className="mt-8">
-      <h1 className="text-2xl font-bold text-ink mb-1">Order food</h1>
-      <p className="text-muted mb-6">
-        Browse available surplus food and claim what your organisation needs.
-      </p>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {[
-          { label: "Food feed",    desc: "Listings matched to your dietary requirements, sorted by score." },
-          { label: "My orders",    desc: "Track claim status, volunteer assignments, and pickup codes." },
-          { label: "Hub filter",   desc: "Show only food available at a specific community hub." },
-          { label: "My impact",    desc: "Completed claims, total kg received, and meals served." },
-        ].map((item) => (
-          <div
-            key={item.label}
-            className="rounded-2xl border border-border bg-white p-5 shadow-sm"
-          >
-            <h2 className="font-semibold text-ink mb-1">{item.label}</h2>
-            <p className="text-sm text-muted">{item.desc}</p>
-          </div>
-        ))}
-      </div>
-    </div>
+    <DashboardShell role="RECIPIENT">
+      <Section id="find-food" title="Find food"  desc="Listings matched to your dietary requirements, sorted by match score." />
+      <Section id="hubs-map"  title="Hubs map"   desc="Find a community hub near you and filter listings by hub." />
+      <Section id="my-orders" title="My orders"  desc="Claims with handover codes, pickup status, and volunteer assignments." />
+    </DashboardShell>
   );
 }

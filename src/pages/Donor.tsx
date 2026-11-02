@@ -1,40 +1,25 @@
-/**
- * Donor dashboard — placeholder
- *
- * Will use these API actions (see docs/API.md):
- *   GET  /api/data?a=profile        → donor profile (name, address, lat/lng, type)
- *   GET  /api/data?a=categories     → [{id, name}]
- *   GET  /api/data?a=tags           → [{id, name, type}]
- *   POST /api/data?a=addListing     → publish a new food listing
- *   POST /api/data?a=reportUnfit    → route food not fit for people
- *   GET  /api/data?a=myListings     → donor's listings with handover details
- *   GET  /api/data?a=myRoutings     → waste routing records
- *   GET  /api/data?a=myImpact       → meals_saved, kg_diverted, co2_avoided_kg, trust_score
- */
+import DashboardShell from "@/components/DashboardShell";
+
+function Section({ id, title, desc }: { id: string; title: string; desc: string }) {
+  return (
+    <section id={id} className="scroll-mt-6 mb-10">
+      <h2 className="text-lg font-bold text-ink mb-1">{title}</h2>
+      <p className="text-sm text-muted mb-4">{desc}</p>
+      <div className="rounded-lg border border-border bg-white p-6 shadow-sm min-h-[120px] flex items-center justify-center">
+        <span className="text-sm text-muted">Coming soon</span>
+      </div>
+    </section>
+  );
+}
+
 export default function Donor() {
   return (
-    <div className="mt-8">
-      <h1 className="text-2xl font-bold text-ink mb-1">Donor dashboard</h1>
-      <p className="text-muted mb-6">
-        List surplus food, track your listings, report unfit food, and see your impact.
-      </p>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {[
-          { label: "Post a listing",   desc: "Publish surplus food for recipients to claim." },
-          { label: "Report unfit food", desc: "Route food that can't go to people to farms, shelters, or biogas." },
-          { label: "My listings",       desc: "Track status, remaining quantity, and hub handovers." },
-          { label: "My impact",         desc: "Meals saved, kg diverted, CO₂ avoided." },
-        ].map((item) => (
-          <div
-            key={item.label}
-            className="rounded-2xl border border-border bg-white p-5 shadow-sm"
-          >
-            <h2 className="font-semibold text-ink mb-1">{item.label}</h2>
-            <p className="text-sm text-muted">{item.desc}</p>
-          </div>
-        ))}
-      </div>
-    </div>
+    <DashboardShell role="DONOR">
+      <Section id="overview"        title="Overview"           desc="Your impact at a glance — meals saved, kg diverted, CO₂ avoided." />
+      <Section id="donate-hub"      title="Donate to a hub"    desc="Publish sealed food to a community hub for a recipient to collect with their code." />
+      <Section id="donate-delivery" title="Donate for delivery" desc="List food for a volunteer to pick up and deliver directly to a recipient." />
+      <Section id="unfit-food"      title="Unfit food"         desc="Route food no longer fit for people to farms, animal shelters, or biogas plants." />
+      <Section id="my-donations"    title="My donations"       desc="All your listings, remaining quantities, status, and hub handover codes." />
+    </DashboardShell>
   );
 }
