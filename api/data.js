@@ -24,17 +24,17 @@ module.exports = async (req, res) => {
         let row;
         if (u.role === "DONOR") {
           [row] = await pool.query(
-            "SELECT donor_name name, address, latitude, longitude, donor_type type FROM DONOR WHERE donor_id=?",
+            "SELECT name, address, latitude, longitude, donor_type type FROM DONOR WHERE donor_id=?",
             [u.pid]);
         } else if (u.role === "RECIPIENT") {
           [row] = await pool.query(
-            "SELECT org_name name, address, latitude, longitude, recipient_type type FROM RECIPIENT WHERE recipient_id=?",
+            "SELECT name, address, latitude, longitude, recipient_type type FROM RECIPIENT WHERE recipient_id=?",
             [u.pid]);
         } else {
           // Volunteer: include vrole and service_radius_km so UI knows which tabs to show
           [row] = await pool.query(
-            `SELECT volunteer_name name, home_address address, home_lat latitude, home_lng longitude,
-                    vehicle_type type, volunteer_role vrole, service_radius_km
+            `SELECT name, latitude, longitude,
+                    vehicle_type type, role vrole, service_radius_km
              FROM VOLUNTEER WHERE volunteer_id=?`,
             [u.pid]);
         }
@@ -46,12 +46,12 @@ module.exports = async (req, res) => {
       // ── categories ──────────────────────────────────────────────────────────
       case "categories":
         return res.json(await q(
-          "SELECT category_id id, category_name name FROM FOOD_CATEGORY ORDER BY category_name"));
+          "SELECT category_id id, category_name name FROM FOOD_CATEGORY ORDER BY category_name") || []);
 
       // ── tags ────────────────────────────────────────────────────────────────
       case "tags":
         return res.json(await q(
-          "SELECT tag_id id, tag_name name, tag_type type FROM TAG ORDER BY tag_type, tag_name"));
+          "SELECT tag_id id, tag_name name, tag_type type FROM TAG ORDER BY tag_type, tag_name") || []);
 
       // ── addListing ──────────────────────────────────────────────────────────
       case "addListing": {
@@ -146,7 +146,7 @@ module.exports = async (req, res) => {
           const partnerId = partnerRow.partner_id;
 
           const [[partner]] = await conn.query(
-            "SELECT partner_name, partner_type FROM WASTE_PARTNER WHERE partner_id=?",
+            "SELECT name partner_name, partner_type FROM WASTE_PARTNER WHERE partner_id=?",
             [partnerId]);
 
           await conn.query(
@@ -174,19 +174,19 @@ module.exports = async (req, res) => {
         const listings = await q(
           `SELECT l.listing_id, l.food_name, l.status, l.expires_at,
                   l.quantity_unit, v.quantity_remaining,
-                  l.storage_type, h.hub_name
+                  l.storage_type, h.name AS hub_name
            FROM FOOD_LISTING l
            JOIN v_listing_remaining v ON v.listing_id = l.listing_id
-           LEFT JOIN HUB h ON h.hub_id = l.hub_id
+           LEFT JOIN COMMUNITY_HUB h ON h.hub_id = l.hub_id
            WHERE l.donor_id = ?
            ORDER BY l.listing_id DESC`,
-          [u.pid]);
+          [u.pid]) || [];
 
         for (const row of listings) {
           if (row.hub_name) {
             const handovers = await q(
               `SELECT hh.handover_id, hh.claim_id,
-                      r.org_name AS recipient_name,
+                      r.name AS recipient_name,
                       c.quantity_claimed, hh.status,
                       hc.label AS compartment_label
                FROM HUB_HANDOVER hh
@@ -218,13 +218,13 @@ module.exports = async (req, res) => {
       case "myRoutings": {
         need("DONOR");
         return res.json(await q(
-          `SELECT l.food_name, wr.route_type, wp.partner_name, wr.quantity_kg, wr.status
+          `SELECT wr.routing_id, l.food_name, wr.route_type, wp.name AS partner_name, wr.quantity_kg, wr.status
            FROM WASTE_ROUTING wr
            JOIN FOOD_LISTING l ON l.listing_id = wr.listing_id
            JOIN WASTE_PARTNER wp ON wp.partner_id = wr.partner_id
            WHERE l.donor_id = ?
            ORDER BY wr.routing_id DESC`,
-          [u.pid]));
+          [u.pid]) || []);
       }
 
       // ── feed ────────────────────────────────────────────────────────────────
@@ -242,11 +242,11 @@ module.exports = async (req, res) => {
         return res.json(await q(
           `SELECT a.listing_id, a.food_name, a.donor_name, a.tags,
                   a.quantity_remaining, a.quantity_unit, a.minutes_left,
-                  l.storage_type, l.hub_id, h.hub_name,
+                  l.storage_type, l.hub_id, h.name AS hub_name,
                   m.score
            FROM v_active_listings a
            JOIN FOOD_LISTING l ON l.listing_id = a.listing_id
-           LEFT JOIN HUB h ON h.hub_id = l.hub_id
+           LEFT JOIN COMMUNITY_HUB h ON h.hub_id = l.hub_id
            LEFT JOIN MATCH_SCORE m
              ON m.listing_id = a.listing_id AND m.recipient_id = ?
            WHERE fn_listing_meets_needs(a.listing_id, ?) = 1
@@ -254,7 +254,7 @@ module.exports = async (req, res) => {
              ${hubFilter}
            ORDER BY (m.score IS NULL), m.score DESC, a.minutes_left`,
           feedParams
-        ));
+        ) || []);
       }
 
       // ── claim ────────────────────────────────────────────────────────────────
@@ -284,9 +284,8 @@ module.exports = async (req, res) => {
           const requiredKg = qty * listing.weight_per_unit_kg;
 
           const [compartments] = await conn.query(
-            `SELECT vs.compartment_id, vs.label, vs.free_kg, h.hub_name
+            `SELECT vs.compartment_id, vs.label, vs.free_kg, vs.hub_name
              FROM v_hub_status vs
-             JOIN HUB h ON h.hub_id = vs.hub_id
              WHERE vs.hub_id = ?
                AND vs.temp_controlled = ?
                AND vs.free_kg >= ?
@@ -333,12 +332,12 @@ module.exports = async (req, res) => {
       case "myClaims": {
         need("RECIPIENT");
         const claims = await q(
-          `SELECT c.claim_id, l.food_name, d.donor_name, c.quantity_claimed,
+          `SELECT c.claim_id, l.food_name, d.name AS donor_name, c.quantity_claimed,
                   c.claim_status,
                   p.pickup_status,
-                  v.volunteer_name,
+                  v.name AS volunteer_name,
                   hh.handover_id, hh.status AS handover_status,
-                  h.hub_name, hc.label AS compartment_label
+                  h.name AS hub_name, hc.label AS compartment_label
            FROM CLAIM c
            JOIN FOOD_LISTING l ON l.listing_id = c.listing_id
            JOIN DONOR d ON d.donor_id = l.donor_id
@@ -346,10 +345,10 @@ module.exports = async (req, res) => {
            LEFT JOIN VOLUNTEER v ON v.volunteer_id = p.volunteer_id
            LEFT JOIN HUB_HANDOVER hh ON hh.claim_id = c.claim_id
            LEFT JOIN HUB_COMPARTMENT hc ON hc.compartment_id = hh.compartment_id
-           LEFT JOIN HUB h ON h.hub_id = hc.hub_id
+           LEFT JOIN COMMUNITY_HUB h ON h.hub_id = hc.hub_id
            WHERE c.recipient_id = ?
            ORDER BY c.claim_id DESC`,
-          [u.pid]);
+          [u.pid]) || [];
 
         return res.json(claims.map(row => ({
           claim_id: row.claim_id,
@@ -374,12 +373,12 @@ module.exports = async (req, res) => {
         if (u.role === "RECIPIENT") {
           const [[summary]] = await pool.query(
             `SELECT
-               COUNT(DISTINCT c.claim_id)            AS claims_completed,
-               COALESCE(SUM(ir.quantity_kg), 0)       AS kg_received,
-               COALESCE(SUM(ir.meals_equivalent), 0)  AS meals_received
+               COUNT(DISTINCT c.claim_id)              AS claims_completed,
+               COALESCE(SUM(ir.kg_diverted), 0)        AS kg_received,
+               COALESCE(SUM(ir.meals_saved), 0)        AS meals_received
              FROM CLAIM c
-             LEFT JOIN PICKUP p       ON p.claim_id  = c.claim_id
-             LEFT JOIN HUB_HANDOVER hh ON hh.claim_id = c.claim_id
+             LEFT JOIN PICKUP p        ON p.claim_id   = c.claim_id
+             LEFT JOIN HUB_HANDOVER hh ON hh.claim_id  = c.claim_id
              LEFT JOIN IMPACT_RECORD ir
                ON ir.pickup_id = p.pickup_id OR ir.handover_id = hh.handover_id
              WHERE c.recipient_id = ? AND c.claim_status = 'COMPLETED'`,
@@ -390,13 +389,13 @@ module.exports = async (req, res) => {
         if (u.role === "VOLUNTEER") {
           const [[summary]] = await pool.query(
             `SELECT
-               COUNT(DISTINCT p.pickup_id)            AS deliveries_completed,
-               COALESCE(SUM(ir.quantity_kg), 0)       AS kg_delivered,
-               COALESCE(SUM(ir.meals_equivalent), 0)  AS meals_delivered,
+               COUNT(DISTINCT p.pickup_id)             AS deliveries_completed,
+               COALESCE(SUM(ir.kg_diverted), 0)        AS kg_delivered,
+               COALESCE(SUM(ir.meals_saved), 0)        AS meals_delivered,
                COALESCE(
                  (SELECT SUM(wc.weighed_kg)
                   FROM WASTE_COLLECTION wc
-                  WHERE wc.volunteer_id = ?), 0)       AS waste_kg_collected
+                  WHERE wc.volunteer_id = ?), 0)        AS waste_kg_collected
              FROM PICKUP p
              LEFT JOIN IMPACT_RECORD ir ON ir.pickup_id = p.pickup_id
              WHERE p.volunteer_id = ? AND p.pickup_status = 'DELIVERED'`,
@@ -424,7 +423,7 @@ module.exports = async (req, res) => {
         try { await pool.query("CALL sp_ensure_slots(7)"); } catch (_) {}
 
         const [[vol]] = await pool.query(
-          "SELECT home_lat, home_lng, service_radius_km, volunteer_role vrole FROM VOLUNTEER WHERE volunteer_id=?",
+          "SELECT latitude home_lat, longitude home_lng, service_radius_km, role vrole FROM VOLUNTEER WHERE volunteer_id=?",
           [u.pid]);
         needVolunteerRole(vol.vrole, "FOOD");
 
@@ -455,7 +454,7 @@ module.exports = async (req, res) => {
                WHERE p.claim_id = c.claim_id
                  AND p.pickup_status IN ('SCHEDULED','ACCEPTED','IN_TRANSIT','DELIVERED'))
            ORDER BY distance_km`,
-          [vol.home_lat, vol.home_lng, vol.home_lat, vol.home_lng, u.pid]);
+          [vol.home_lat, vol.home_lng, vol.home_lat, vol.home_lng, u.pid]) || [];
 
         // Fetch eligible FOOD slots once (not per-claim) then filter in JS
         const allSlots = await q(
@@ -468,7 +467,7 @@ module.exports = async (req, res) => {
              AND TIMESTAMP(s.slot_date, s.start_time) > NOW()
              AND s.slot_date >= CURDATE()
              AND fn_volunteer_slot_conflict(?, s.slot_id) = 0`,
-          [u.pid]);
+          [u.pid]) || [];
 
         const result = claims.map(c => {
           const eligibleSlots = allSlots.filter(s =>
@@ -506,7 +505,7 @@ module.exports = async (req, res) => {
       case "accept": {
         need("VOLUNTEER");
         const [[vol]] = await pool.query(
-          "SELECT volunteer_role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
+          "SELECT role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
         needVolunteerRole(vol.vrole, "FOOD");
 
         const [ins] = await pool.query(
@@ -537,13 +536,29 @@ module.exports = async (req, res) => {
                  delivered_at = NULL
              WHERE pickup_id = ? AND volunteer_id = ?`,
             [failure_reason, pickup_id, u.pid]);
+        } else if (status === "DELIVERED") {
+          // chk_pickup_deliv_qty requires quantity_delivered > 0; use quantity_claimed
+          const [[pickupRow]] = await pool.query(
+            `SELECT c.quantity_claimed
+             FROM PICKUP p
+             JOIN CLAIM c ON c.claim_id = p.claim_id
+             WHERE p.pickup_id = ? AND p.volunteer_id = ?`,
+            [pickup_id, u.pid]);
+          if (!pickupRow)
+            return res.status(404).json({ error: "Pickup not found" });
+          await pool.query(
+            `UPDATE PICKUP
+             SET pickup_status = 'DELIVERED',
+                 quantity_delivered = ?,
+                 delivered_at = NOW()
+             WHERE pickup_id = ? AND volunteer_id = ?`,
+            [pickupRow.quantity_claimed, pickup_id, u.pid]);
         } else {
           await pool.query(
             `UPDATE PICKUP
-             SET pickup_status = ?,
-                 delivered_at = IF(? = 'DELIVERED', NOW(), delivered_at)
+             SET pickup_status = ?
              WHERE pickup_id = ? AND volunteer_id = ?`,
-            [status, status, pickup_id, u.pid]);
+            [status, pickup_id, u.pid]);
         }
         return res.json({ ok: 1 });
       }
@@ -565,16 +580,23 @@ module.exports = async (req, res) => {
            LEFT JOIN DELIVERY_SLOT s ON s.slot_id = p.slot_id
            WHERE p.volunteer_id = ?
            ORDER BY p.pickup_id DESC`,
-          [u.pid]));
+          [u.pid]) || []);
       }
 
       // ── deliver (legacy alias → setStatus DELIVERED) ──────────────────────────
       case "deliver": {
         need("VOLUNTEER");
-        await pool.query(
-          `UPDATE PICKUP SET pickup_status='DELIVERED', delivered_at=NOW()
-           WHERE pickup_id=? AND volunteer_id=? AND pickup_status<>'DELIVERED'`,
+        const [[delivRow]] = await pool.query(
+          `SELECT c.quantity_claimed
+           FROM PICKUP p JOIN CLAIM c ON c.claim_id = p.claim_id
+           WHERE p.pickup_id = ? AND p.volunteer_id = ?`,
           [b.pickup_id, u.pid]);
+        if (!delivRow) return res.status(404).json({ error: "Pickup not found" });
+        await pool.query(
+          `UPDATE PICKUP
+           SET pickup_status='DELIVERED', quantity_delivered=?, delivered_at=NOW()
+           WHERE pickup_id=? AND volunteer_id=? AND pickup_status<>'DELIVERED'`,
+          [delivRow.quantity_claimed, b.pickup_id, u.pid]);
         return res.json({ ok: 1 });
       }
 
@@ -586,7 +608,7 @@ module.exports = async (req, res) => {
       case "wasteJobs": {
         need("VOLUNTEER");
         const [[vol]] = await pool.query(
-          "SELECT volunteer_role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
+          "SELECT role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
         needVolunteerRole(vol.vrole, "WASTE");
 
         return res.json(await q(
@@ -597,7 +619,7 @@ module.exports = async (req, res) => {
                   wr.condition_grade,
                   wr.route_type,
                   wp.partner_id,
-                  wp.partner_name,
+                  wp.name AS partner_name,
                   wp.address   AS partner_address
            FROM WASTE_ROUTING wr
            JOIN FOOD_LISTING l   ON l.listing_id  = wr.listing_id
@@ -605,7 +627,7 @@ module.exports = async (req, res) => {
            JOIN WASTE_PARTNER wp ON wp.partner_id  = wr.partner_id
            WHERE wr.status = 'PENDING'
              AND wr.collection_id IS NULL
-           ORDER BY wr.routing_id`));
+           ORDER BY wr.routing_id`) || []);
       }
 
       // ── wasteSlots ────────────────────────────────────────────────────────────
@@ -615,7 +637,7 @@ module.exports = async (req, res) => {
         try { await pool.query("CALL sp_ensure_slots(7)"); } catch (_) {}
 
         const [[vol]] = await pool.query(
-          "SELECT volunteer_role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
+          "SELECT role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
         needVolunteerRole(vol.vrole, "WASTE");
 
         return res.json(await q(
@@ -630,17 +652,17 @@ module.exports = async (req, res) => {
              AND s.capacity > (SELECT COUNT(*) FROM WASTE_COLLECTION wc WHERE wc.slot_id = s.slot_id)
              AND fn_volunteer_slot_conflict(?, s.slot_id) = 0
            ORDER BY s.slot_date, s.start_time`,
-          [u.pid]));
+          [u.pid]) || []);
       }
 
       // ── containers ────────────────────────────────────────────────────────────
       case "containers": {
         need("VOLUNTEER");
         return res.json(await q(
-          `SELECT container_id, container_label, container_type, capacity_kg
+          `SELECT container_id, label AS container_label, container_type
            FROM CONTAINER
            WHERE container_type = 'WASTE'
-           ORDER BY container_label`));
+           ORDER BY label`) || []);
       }
 
       // ── collect ───────────────────────────────────────────────────────────────
@@ -652,7 +674,7 @@ module.exports = async (req, res) => {
           return res.status(400).json({ error: "waste_ids must be a non-empty array" });
 
         const [[vol]] = await pool.query(
-          "SELECT volunteer_role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
+          "SELECT role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
         needVolunteerRole(vol.vrole, "WASTE");
 
         const conn = await pool.getConnection();
@@ -706,13 +728,13 @@ module.exports = async (req, res) => {
       case "myCollections": {
         need("VOLUNTEER");
         return res.json(await q(
-          `SELECT wc.collection_id, wp.partner_name, wc.weighed_kg,
+          `SELECT wc.collection_id, wp.name AS partner_name, wc.weighed_kg,
                   wc.receipt_ref, wc.collected_at
            FROM WASTE_COLLECTION wc
            JOIN WASTE_PARTNER wp ON wp.partner_id = wc.partner_id
            WHERE wc.volunteer_id = ?
            ORDER BY wc.collection_id DESC`,
-          [u.pid]));
+          [u.pid]) || []);
       }
 
       default:
