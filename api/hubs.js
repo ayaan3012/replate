@@ -138,7 +138,9 @@ module.exports = async (req, res) => {
 
       if (st === "AWAITING_DROP") {
         if (codeHash === ho.drop_code_hash) {
-          await pool.query("UPDATE HUB_HANDOVER SET status='DROPPED' WHERE handover_id=?", [handoverId]);
+          await pool.query(
+            "UPDATE HUB_HANDOVER SET status='DROPPED', dropped_at=NOW() WHERE handover_id=? AND status='AWAITING_DROP'",
+            [handoverId]);
           return res.json({
             action: "DROP_OK",
             compartment: ho.label,
@@ -164,7 +166,9 @@ module.exports = async (req, res) => {
 
       if (st === "DROPPED") {
         if (codeHash === ho.pickup_code_hash) {
-          await pool.query("UPDATE HUB_HANDOVER SET status='COLLECTED' WHERE handover_id=?", [handoverId]);
+          await pool.query(
+            "UPDATE HUB_HANDOVER SET status='COLLECTED', collected_at=NOW() WHERE handover_id=? AND status='DROPPED'",
+            [handoverId]);
           return res.json({
             action: "COLLECT_OK",
             compartment: ho.label,

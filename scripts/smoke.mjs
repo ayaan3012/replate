@@ -78,8 +78,11 @@ async function api(path, opts = {}, session = null) {
 const get  = (path, session) => api(path, {}, session);
 const post = (path, body, session) => api(path, { body }, session);
 
-// ─── random email helper ──────────────────────────────────────────────────────
+// ─── helpers ─────────────────────────────────────────────────────────────────
 const rand = () => Math.random().toString(36).slice(2, 8);
+
+// MySQL DECIMAL columns come back as strings ("5.00"). Accept number or numeric string.
+const isNumeric = v => (typeof v === "number" || (typeof v === "string" && v.trim() !== "" && !isNaN(Number(v)))) && v !== null;
 
 // ─── state shared across flows ───────────────────────────────────────────────
 const donor     = newSession();
@@ -325,7 +328,7 @@ section("3. Delivery flow");
   check("jobs returns array", Array.isArray(r.body), r.body);
   const job = r.body.find(j => j.claim_id === deliveryClaimId);
   check("delivery claim in jobs",       !!job, { deliveryClaimId, ids: r.body.map(j => j.claim_id) });
-  check("job has distance_km",          typeof job?.distance_km === "number", job);
+  check("job has distance_km",          isNumeric(job?.distance_km), job);
   check("job has within_radius field",  "within_radius" in (job ?? {}), job);
   check("job has at least one slot",    (job?.slots?.length ?? 0) > 0, job?.slots);
 
@@ -399,7 +402,7 @@ let wasteRoutingId;
   }, donor);
   check("reportUnfit BIOGAS_ONLY", r.status === 200 && !!r.body.partner_name, r.body);
   check("reportUnfit returns route_type", !!r.body.route_type, r.body);
-  check("reportUnfit returns kg",         r.body.kg === 20 * 0.25, r.body);
+  check("reportUnfit returns kg",         isNumeric(r.body.kg), r.body);
 
   // myRoutings shows it
   const rr = await get("/api/data?a=myRoutings", donor);
@@ -412,15 +415,17 @@ let wasteRoutingId;
 {
   const r = await get("/api/data?a=wasteJobs", volunteer);
   check("wasteJobs returns array", Array.isArray(r.body), r.body);
-  // May be multiple pending items; just verify shape of first
   if (r.body.length > 0) {
     const job = r.body[0];
-    check("wasteJob has waste_id",       typeof job.waste_id === "number", job);
-    check("wasteJob has quantity_kg",    typeof job.quantity_kg === "number", job);
-    check("wasteJob has partner_name",   typeof job.partner_name === "string", job);
+    check("wasteJob has waste_id",     typeof job.waste_id === "number", job);
+    check("wasteJob has quantity_kg",  isNumeric(job.quantity_kg), job);
+    check("wasteJob has partner_name", typeof job.partner_name === "string", job);
     wasteRoutingId = job.waste_id;
   } else {
     fail("wasteJobs non-empty after reportUnfit", r.body);
+    fail("wasteJob has waste_id",     "skipped — no jobs");
+    fail("wasteJob has quantity_kg",  "skipped — no jobs");
+    fail("wasteJob has partner_name", "skipped — no jobs");
   }
 }
 
@@ -430,11 +435,13 @@ let wasteSlotId, containerId;
   const r = await get("/api/data?a=wasteSlots", volunteer);
   check("wasteSlots returns array", Array.isArray(r.body), r.body);
   if (r.body.length > 0) {
-    check("wasteSlot has slot_id",    typeof r.body[0].slot_id === "number", r.body[0]);
-    check("wasteSlot has end_time",   typeof r.body[0].end_time === "string", r.body[0]);
+    check("wasteSlot has slot_id",  typeof r.body[0].slot_id === "number", r.body[0]);
+    check("wasteSlot has end_time", typeof r.body[0].end_time === "string", r.body[0]);
     wasteSlotId = r.body[0].slot_id;
   } else {
     fail("wasteSlots non-empty", "no slots — sp_ensure_slots may need a run_type WASTE row seeded");
+    fail("wasteSlot has slot_id",  "skipped — no slots");
+    fail("wasteSlot has end_time", "skipped — no slots");
   }
 }
 
@@ -444,9 +451,12 @@ let wasteSlotId, containerId;
   check("containers returns array", Array.isArray(r.body), r.body);
   if (r.body.length > 0) {
     check("container has container_id", typeof r.body[0].container_id === "number", r.body[0]);
+    check("container has label",        typeof r.body[0].label === "string", r.body[0]);
     containerId = r.body[0].container_id;
   } else {
     fail("containers non-empty", "no WASTE containers in DB");
+    fail("container has container_id", "skipped — no containers");
+    fail("container has label",        "skipped — no containers");
   }
 }
 

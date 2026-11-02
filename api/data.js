@@ -1,8 +1,7 @@
 const { pool, user, errJson, makeCode, hash } = require("../lib/util");
 
-// Helper: throw if volunteer's vrole doesn't cover the required task type
+// Helper: throw if volunteer's role doesn't cover the required task type
 const needVolunteerRole = (vrole, type) => {
-  // type is 'FOOD' or 'WASTE'
   if (type === "FOOD" && vrole !== "FOOD_ONLY" && vrole !== "DUAL")
     throw new Error("Your volunteer role does not include food deliveries");
   if (type === "WASTE" && vrole !== "WASTE_ONLY" && vrole !== "DUAL")
@@ -31,7 +30,7 @@ module.exports = async (req, res) => {
             "SELECT name, address, latitude, longitude, recipient_type type FROM RECIPIENT WHERE recipient_id=?",
             [u.pid]);
         } else {
-          // Volunteer: include vrole and service_radius_km so UI knows which tabs to show
+          // VOLUNTEER: no address column; surface role as vrole for UI tab routing
           [row] = await pool.query(
             `SELECT name, latitude, longitude,
                     vehicle_type type, role vrole, service_radius_km
@@ -91,6 +90,7 @@ module.exports = async (req, res) => {
               "INSERT INTO LISTING_TAG (listing_id, tag_id, contains_flag) VALUES (?, ?, ?)",
               [listingId, alg.tag_id, alg.contains ? 1 : 0]);
 
+          // FOOD_SAFETY_CHECK columns: check_id, listing_id, check_type, temperature_c, result, checked_at, stage
           const checkType = hub_id ? "SEAL" : "VISUAL";
           await conn.query(
             "INSERT INTO FOOD_SAFETY_CHECK (listing_id, stage, check_type, result) VALUES (?, 'LISTING', ?, 'PASS')",
@@ -145,10 +145,13 @@ module.exports = async (req, res) => {
           }
           const partnerId = partnerRow.partner_id;
 
+          // WASTE_PARTNER columns: partner_id, name, partner_type, address, …
           const [[partner]] = await conn.query(
-            "SELECT name partner_name, partner_type FROM WASTE_PARTNER WHERE partner_id=?",
+            "SELECT name AS partner_name, partner_type FROM WASTE_PARTNER WHERE partner_id=?",
             [partnerId]);
 
+          // WASTE_ROUTING columns: waste_id, listing_id, route_type, quantity_kg, status, routed_at,
+          //                        partner_id, collection_id, condition_grade
           await conn.query(
             `INSERT INTO WASTE_ROUTING (listing_id, route_type, partner_id, condition_grade, quantity_kg)
              VALUES (?, ?, ?, ?, ?)`,
@@ -187,7 +190,8 @@ module.exports = async (req, res) => {
             const handovers = await q(
               `SELECT hh.handover_id, hh.claim_id,
                       r.name AS recipient_name,
-                      c.quantity_claimed, hh.status,
+                      c.quantity_claimed,
+                      hh.status,
                       hc.label AS compartment_label
                FROM HUB_HANDOVER hh
                JOIN CLAIM c ON c.claim_id = hh.claim_id
@@ -196,7 +200,7 @@ module.exports = async (req, res) => {
                LEFT JOIN HUB_COMPARTMENT hc ON hc.compartment_id = hh.compartment_id
                WHERE fl.donor_id = ? AND fl.listing_id = ?
                ORDER BY hh.handover_id`,
-              [u.pid, row.listing_id]);
+              [u.pid, row.listing_id]) || [];
 
             row.handovers = handovers.map(hv => ({
               handover_id: hv.handover_id,
@@ -215,15 +219,17 @@ module.exports = async (req, res) => {
       }
 
       // ── myRoutings ──────────────────────────────────────────────────────────
+      // WASTE_ROUTING PK: waste_id  (NO routing_id column)
       case "myRoutings": {
         need("DONOR");
         return res.json(await q(
-          `SELECT wr.routing_id, l.food_name, wr.route_type, wp.name AS partner_name, wr.quantity_kg, wr.status
+          `SELECT wr.waste_id, l.food_name, wr.route_type,
+                  wp.name AS partner_name, wr.quantity_kg, wr.status
            FROM WASTE_ROUTING wr
-           JOIN FOOD_LISTING l ON l.listing_id = wr.listing_id
+           JOIN FOOD_LISTING l   ON l.listing_id = wr.listing_id
            JOIN WASTE_PARTNER wp ON wp.partner_id = wr.partner_id
            WHERE l.donor_id = ?
-           ORDER BY wr.routing_id DESC`,
+           ORDER BY wr.waste_id DESC`,
           [u.pid]) || []);
       }
 
@@ -231,6 +237,7 @@ module.exports = async (req, res) => {
       case "feed": {
         need("RECIPIENT");
 
+        // RECIPIENT.has_cold_storage ✓
         const [[recip]] = await pool.query(
           "SELECT has_cold_storage FROM RECIPIENT WHERE recipient_id=?", [u.pid]);
         const hasCold = recip && recip.has_cold_storage;
@@ -239,14 +246,16 @@ module.exports = async (req, res) => {
         const feedParams = [u.pid, u.pid, hasCold ? 1 : 0];
         if (req.query.hub_id) feedParams.push(Number(req.query.hub_id));
 
+        // v_active_listings columns: listing_id, food_name, donor_name, category_name,
+        //   storage_type, quantity_remaining, quantity_unit, expires_at, minutes_left, tags, hub_name
+        // COMMUNITY_HUB.name used for hub_name (view already has hub_name but we need hub_id from l)
         return res.json(await q(
           `SELECT a.listing_id, a.food_name, a.donor_name, a.tags,
                   a.quantity_remaining, a.quantity_unit, a.minutes_left,
-                  l.storage_type, l.hub_id, h.name AS hub_name,
+                  l.storage_type, l.hub_id, a.hub_name,
                   m.score
            FROM v_active_listings a
            JOIN FOOD_LISTING l ON l.listing_id = a.listing_id
-           LEFT JOIN COMMUNITY_HUB h ON h.hub_id = l.hub_id
            LEFT JOIN MATCH_SCORE m
              ON m.listing_id = a.listing_id AND m.recipient_id = ?
            WHERE fn_listing_meets_needs(a.listing_id, ?) = 1
@@ -280,6 +289,9 @@ module.exports = async (req, res) => {
             return res.json({ claim_id: claimId, handover_id: null, hub_name: null, compartment: null, pickup_code: null });
           }
 
+          // v_hub_status: compartment_id, hub_id, hub_name, address, hub_type,
+          //               latitude, longitude, hub_status, label, temp_controlled,
+          //               max_weight_kg, free_kg, accepting
           const needsCold = ["REFRIGERATED", "FROZEN"].includes(listing.storage_type) ? 1 : 0;
           const requiredKg = qty * listing.weight_per_unit_kg;
 
@@ -301,6 +313,9 @@ module.exports = async (req, res) => {
 
           const comp = compartments[0];
 
+          // HUB_HANDOVER columns: handover_id, claim_id, compartment_id,
+          //   drop_code_hash, pickup_code_hash, code_expires_at, failed_attempts,
+          //   dropped_at, collected_at, stored_until
           const [hins] = await conn.query(
             `INSERT INTO HUB_HANDOVER
               (claim_id, compartment_id, drop_code_hash, pickup_code_hash, code_expires_at)
@@ -331,13 +346,14 @@ module.exports = async (req, res) => {
       // ── myClaims ─────────────────────────────────────────────────────────────
       case "myClaims": {
         need("RECIPIENT");
+        // HUB_HANDOVER has status column; set alongside dropped_at/collected_at in kiosk
         const claims = await q(
           `SELECT c.claim_id, l.food_name, d.name AS donor_name, c.quantity_claimed,
                   c.claim_status,
                   p.pickup_status,
                   v.name AS volunteer_name,
                   hh.handover_id, hh.status AS handover_status,
-                  h.name AS hub_name, hc.label AS compartment_label
+                  ch.name AS hub_name, hc.label AS compartment_label
            FROM CLAIM c
            JOIN FOOD_LISTING l ON l.listing_id = c.listing_id
            JOIN DONOR d ON d.donor_id = l.donor_id
@@ -345,7 +361,7 @@ module.exports = async (req, res) => {
            LEFT JOIN VOLUNTEER v ON v.volunteer_id = p.volunteer_id
            LEFT JOIN HUB_HANDOVER hh ON hh.claim_id = c.claim_id
            LEFT JOIN HUB_COMPARTMENT hc ON hc.compartment_id = hh.compartment_id
-           LEFT JOIN COMMUNITY_HUB h ON h.hub_id = hc.hub_id
+           LEFT JOIN COMMUNITY_HUB ch ON ch.hub_id = hc.hub_id
            WHERE c.recipient_id = ?
            ORDER BY c.claim_id DESC`,
           [u.pid]) || [];
@@ -369,6 +385,8 @@ module.exports = async (req, res) => {
       }
 
       // ── myImpact — role-branched ──────────────────────────────────────────────
+      // IMPACT_RECORD columns: impact_id, pickup_id, handover_id, collection_id,
+      //                        meals_saved, kg_diverted, co2_avoided_kg, recorded_at
       case "myImpact": {
         if (u.role === "RECIPIENT") {
           const [[summary]] = await pool.query(
@@ -403,7 +421,8 @@ module.exports = async (req, res) => {
           return res.json(summary);
         }
 
-        // DONOR
+        // DONOR — v_donor_impact columns: donor_id, donor_name, trust_score,
+        //                                  meals_saved, kg_diverted, co2_avoided_kg
         need("DONOR");
         const [rows] = await pool.query(
           "SELECT meals_saved, kg_diverted, co2_avoided_kg, trust_score FROM v_donor_impact WHERE donor_id=?",
@@ -418,16 +437,14 @@ module.exports = async (req, res) => {
       // ── jobs ─────────────────────────────────────────────────────────────────
       case "jobs": {
         need("VOLUNTEER");
-
-        // Ensure upcoming slots exist for the next 7 days
         try { await pool.query("CALL sp_ensure_slots(7)"); } catch (_) {}
 
+        // VOLUNTEER columns used: latitude, longitude, service_radius_km, role
         const [[vol]] = await pool.query(
-          "SELECT latitude home_lat, longitude home_lng, service_radius_km, role vrole FROM VOLUNTEER WHERE volunteer_id=?",
+          "SELECT latitude, longitude, service_radius_km, role vrole FROM VOLUNTEER WHERE volunteer_id=?",
           [u.pid]);
         needVolunteerRole(vol.vrole, "FOOD");
 
-        // One query per claim — attach eligible slots in JS to avoid a complex correlated subquery
         const claims = await q(
           `SELECT
              c.claim_id,
@@ -436,16 +453,16 @@ module.exports = async (req, res) => {
              d.address           AS pickup_from,
              r.address           AS deliver_to,
              l.expires_at,
-             fn_distance_km(?, ?, d.latitude, d.longitude)  AS distance_km,
-             fn_distance_km(?, ?, d.latitude, d.longitude) <= v.service_radius_km
-                                  AS within_radius,
+             fn_distance_km(?, ?, d.latitude, d.longitude)         AS distance_km,
+             fn_distance_km(?, ?, d.latitude, d.longitude)
+               <= v.service_radius_km                               AS within_radius,
              r.receiving_from,
              r.receiving_until
            FROM CLAIM c
-           JOIN FOOD_LISTING l  ON l.listing_id   = c.listing_id
-           JOIN DONOR d         ON d.donor_id      = l.donor_id
-           JOIN RECIPIENT r     ON r.recipient_id  = c.recipient_id
-           JOIN VOLUNTEER v     ON v.volunteer_id  = ?
+           JOIN FOOD_LISTING l  ON l.listing_id  = c.listing_id
+           JOIN DONOR d         ON d.donor_id     = l.donor_id
+           JOIN RECIPIENT r     ON r.recipient_id = c.recipient_id
+           JOIN VOLUNTEER v     ON v.volunteer_id = ?
            WHERE c.claim_status IN ('PENDING','APPROVED')
              AND l.hub_id IS NULL
              AND l.expires_at > NOW()
@@ -454,9 +471,8 @@ module.exports = async (req, res) => {
                WHERE p.claim_id = c.claim_id
                  AND p.pickup_status IN ('SCHEDULED','ACCEPTED','IN_TRANSIT','DELIVERED'))
            ORDER BY distance_km`,
-          [vol.home_lat, vol.home_lng, vol.home_lat, vol.home_lng, u.pid]) || [];
+          [vol.latitude, vol.longitude, vol.latitude, vol.longitude, u.pid]) || [];
 
-        // Fetch eligible FOOD slots once (not per-claim) then filter in JS
         const allSlots = await q(
           `SELECT s.slot_id, s.slot_date, s.start_time, s.end_time, s.capacity,
                   (SELECT COUNT(*) FROM PICKUP p2
@@ -470,15 +486,17 @@ module.exports = async (req, res) => {
           [u.pid]) || [];
 
         const result = claims.map(c => {
-          const eligibleSlots = allSlots.filter(s =>
-            // slot must end before or at listing expiry
-            new Date(`${s.slot_date.toISOString ? s.slot_date.toISOString().slice(0,10) : String(s.slot_date).slice(0,10)}T${s.end_time}`) <= new Date(c.expires_at) &&
-            // respect recipient receiving window if set
-            (!c.receiving_from || s.start_time >= c.receiving_from) &&
-            (!c.receiving_until || s.end_time <= c.receiving_until) &&
-            // free capacity
-            s.active_pickups < s.capacity
-          ).map(s => ({
+          const expiryMs = new Date(c.expires_at).getTime();
+          const eligibleSlots = allSlots.filter(s => {
+            const dateStr = s.slot_date instanceof Date
+              ? s.slot_date.toISOString().slice(0, 10)
+              : String(s.slot_date).slice(0, 10);
+            const endMs = new Date(`${dateStr}T${s.end_time}`).getTime();
+            return endMs <= expiryMs &&
+              (!c.receiving_from  || s.start_time >= c.receiving_from) &&
+              (!c.receiving_until || s.end_time   <= c.receiving_until) &&
+              s.active_pickups < s.capacity;
+          }).map(s => ({
             slot_id: s.slot_id,
             slot_date: s.slot_date,
             start_time: s.start_time,
@@ -512,7 +530,7 @@ module.exports = async (req, res) => {
           "INSERT INTO PICKUP (claim_id, volunteer_id, slot_id) VALUES (?, ?, ?)",
           [b.claim_id, u.pid, b.slot_id]);
         await pool.query(
-          "UPDATE PICKUP SET pickup_status='ACCEPTED' WHERE pickup_id=?",
+          "UPDATE PICKUP SET pickup_status='ACCEPTED', responded_at=NOW() WHERE pickup_id=?",
           [ins.insertId]);
         return res.json({ ok: 1, pickup_id: ins.insertId });
       }
@@ -532,33 +550,30 @@ module.exports = async (req, res) => {
         if (status === "FAILED") {
           await pool.query(
             `UPDATE PICKUP
-             SET pickup_status = 'FAILED', failure_reason = ?,
-                 delivered_at = NULL
+             SET pickup_status = 'FAILED', failure_reason = ?
              WHERE pickup_id = ? AND volunteer_id = ?`,
             [failure_reason, pickup_id, u.pid]);
         } else if (status === "DELIVERED") {
-          // chk_pickup_deliv_qty requires quantity_delivered > 0; use quantity_claimed
-          const [[pickupRow]] = await pool.query(
-            `SELECT c.quantity_claimed
-             FROM PICKUP p
-             JOIN CLAIM c ON c.claim_id = p.claim_id
-             WHERE p.pickup_id = ? AND p.volunteer_id = ?`,
+          const [upd] = await pool.query(
+            `UPDATE PICKUP p
+               JOIN CLAIM c ON c.claim_id = p.claim_id
+             SET p.pickup_status      = 'DELIVERED',
+                 p.picked_up_at       = COALESCE(p.picked_up_at, NOW()),
+                 p.delivered_at       = NOW(),
+                 p.quantity_delivered = c.quantity_claimed
+             WHERE p.pickup_id = ? AND p.volunteer_id = ?
+               AND p.pickup_status IN ('ACCEPTED','IN_TRANSIT')`,
             [pickup_id, u.pid]);
-          if (!pickupRow)
-            return res.status(404).json({ error: "Pickup not found" });
-          await pool.query(
-            `UPDATE PICKUP
-             SET pickup_status = 'DELIVERED',
-                 quantity_delivered = ?,
-                 delivered_at = NOW()
-             WHERE pickup_id = ? AND volunteer_id = ?`,
-            [pickupRow.quantity_claimed, pickup_id, u.pid]);
+          if (upd.affectedRows === 0)
+            return res.status(400).json({ error: "Pickup not found or already finished" });
         } else {
+          // IN_TRANSIT
           await pool.query(
             `UPDATE PICKUP
-             SET pickup_status = ?
+             SET pickup_status = 'IN_TRANSIT',
+                 picked_up_at  = COALESCE(picked_up_at, NOW())
              WHERE pickup_id = ? AND volunteer_id = ?`,
-            [status, pickup_id, u.pid]);
+            [pickup_id, u.pid]);
         }
         return res.json({ ok: 1 });
       }
@@ -566,6 +581,9 @@ module.exports = async (req, res) => {
       // ── myPickups ─────────────────────────────────────────────────────────────
       case "myPickups": {
         need("VOLUNTEER");
+        // PICKUP columns: pickup_id, claim_id, volunteer_id, slot_id, pickup_status,
+        //   picked_up_at, assigned_at, responded_at, delivered_at, quantity_delivered,
+        //   failure_reason, confirm_code_hash, container_id
         return res.json(await q(
           `SELECT p.pickup_id, l.food_name, c.quantity_claimed, p.pickup_status,
                   d.address  AS pickup_from,
@@ -573,9 +591,9 @@ module.exports = async (req, res) => {
                   s.slot_date, s.start_time, s.end_time,
                   p.delivered_at
            FROM PICKUP p
-           JOIN CLAIM c        ON c.claim_id    = p.claim_id
-           JOIN FOOD_LISTING l ON l.listing_id  = c.listing_id
-           JOIN DONOR d        ON d.donor_id    = l.donor_id
+           JOIN CLAIM c        ON c.claim_id     = p.claim_id
+           JOIN FOOD_LISTING l ON l.listing_id   = c.listing_id
+           JOIN DONOR d        ON d.donor_id     = l.donor_id
            JOIN RECIPIENT r    ON r.recipient_id = c.recipient_id
            LEFT JOIN DELIVERY_SLOT s ON s.slot_id = p.slot_id
            WHERE p.volunteer_id = ?
@@ -586,17 +604,18 @@ module.exports = async (req, res) => {
       // ── deliver (legacy alias → setStatus DELIVERED) ──────────────────────────
       case "deliver": {
         need("VOLUNTEER");
-        const [[delivRow]] = await pool.query(
-          `SELECT c.quantity_claimed
-           FROM PICKUP p JOIN CLAIM c ON c.claim_id = p.claim_id
-           WHERE p.pickup_id = ? AND p.volunteer_id = ?`,
+        const [upd] = await pool.query(
+          `UPDATE PICKUP p
+             JOIN CLAIM c ON c.claim_id = p.claim_id
+           SET p.pickup_status      = 'DELIVERED',
+               p.picked_up_at       = COALESCE(p.picked_up_at, NOW()),
+               p.delivered_at       = NOW(),
+               p.quantity_delivered = c.quantity_claimed
+           WHERE p.pickup_id = ? AND p.volunteer_id = ?
+             AND p.pickup_status <> 'DELIVERED'`,
           [b.pickup_id, u.pid]);
-        if (!delivRow) return res.status(404).json({ error: "Pickup not found" });
-        await pool.query(
-          `UPDATE PICKUP
-           SET pickup_status='DELIVERED', quantity_delivered=?, delivered_at=NOW()
-           WHERE pickup_id=? AND volunteer_id=? AND pickup_status<>'DELIVERED'`,
-          [delivRow.quantity_claimed, b.pickup_id, u.pid]);
+        if (upd.affectedRows === 0)
+          return res.status(400).json({ error: "Pickup not found or already finished" });
         return res.json({ ok: 1 });
       }
 
@@ -605,6 +624,8 @@ module.exports = async (req, res) => {
       // ════════════════════════════════════════════════════════════════════════
 
       // ── wasteJobs ─────────────────────────────────────────────────────────────
+      // WASTE_ROUTING columns: waste_id (PK), listing_id, route_type, quantity_kg,
+      //   status, routed_at, partner_id, collection_id, condition_grade
       case "wasteJobs": {
         need("VOLUNTEER");
         const [[vol]] = await pool.query(
@@ -612,14 +633,14 @@ module.exports = async (req, res) => {
         needVolunteerRole(vol.vrole, "WASTE");
 
         return res.json(await q(
-          `SELECT wr.routing_id AS waste_id,
+          `SELECT wr.waste_id,
                   l.food_name,
                   d.address    AS donor_address,
                   wr.quantity_kg,
                   wr.condition_grade,
                   wr.route_type,
                   wp.partner_id,
-                  wp.name AS partner_name,
+                  wp.name      AS partner_name,
                   wp.address   AS partner_address
            FROM WASTE_ROUTING wr
            JOIN FOOD_LISTING l   ON l.listing_id  = wr.listing_id
@@ -627,13 +648,12 @@ module.exports = async (req, res) => {
            JOIN WASTE_PARTNER wp ON wp.partner_id  = wr.partner_id
            WHERE wr.status = 'PENDING'
              AND wr.collection_id IS NULL
-           ORDER BY wr.routing_id`) || []);
+           ORDER BY wr.waste_id`) || []);
       }
 
       // ── wasteSlots ────────────────────────────────────────────────────────────
       case "wasteSlots": {
         need("VOLUNTEER");
-
         try { await pool.query("CALL sp_ensure_slots(7)"); } catch (_) {}
 
         const [[vol]] = await pool.query(
@@ -641,31 +661,33 @@ module.exports = async (req, res) => {
         needVolunteerRole(vol.vrole, "WASTE");
 
         return res.json(await q(
-          `SELECT s.slot_id, s.slot_date, s.start_time, s.end_time,
-                  s.capacity,
+          `SELECT s.slot_id, s.slot_date, s.start_time, s.end_time, s.capacity,
                   (SELECT COUNT(*) FROM WASTE_COLLECTION wc
                    WHERE wc.slot_id = s.slot_id) AS booked
            FROM DELIVERY_SLOT s
            WHERE s.run_type = 'WASTE'
              AND s.slot_date >= CURDATE()
              AND TIMESTAMP(s.slot_date, s.start_time) > NOW()
-             AND s.capacity > (SELECT COUNT(*) FROM WASTE_COLLECTION wc WHERE wc.slot_id = s.slot_id)
+             AND s.capacity > (
+               SELECT COUNT(*) FROM WASTE_COLLECTION wc WHERE wc.slot_id = s.slot_id)
              AND fn_volunteer_slot_conflict(?, s.slot_id) = 0
            ORDER BY s.slot_date, s.start_time`,
           [u.pid]) || []);
       }
 
       // ── containers ────────────────────────────────────────────────────────────
+      // CONTAINER columns: container_id, label, container_type  (NO capacity_kg)
       case "containers": {
         need("VOLUNTEER");
         return res.json(await q(
-          `SELECT container_id, label AS container_label, container_type
+          `SELECT container_id, label, container_type
            FROM CONTAINER
            WHERE container_type = 'WASTE'
            ORDER BY label`) || []);
       }
 
       // ── collect ───────────────────────────────────────────────────────────────
+      // WASTE_ROUTING PK: waste_id (not routing_id)
       case "collect": {
         need("VOLUNTEER");
         const { waste_ids, slot_id, container_id, vehicle_no, weighed_kg } = b;
@@ -681,12 +703,11 @@ module.exports = async (req, res) => {
         try {
           await conn.beginTransaction();
 
-          // Verify all waste_ids belong to the same partner and are still PENDING
           const placeholders = waste_ids.map(() => "?").join(",");
           const [rows] = await conn.query(
             `SELECT DISTINCT wr.partner_id
              FROM WASTE_ROUTING wr
-             WHERE wr.routing_id IN (${placeholders})
+             WHERE wr.waste_id IN (${placeholders})
                AND wr.status = 'PENDING'
                AND wr.collection_id IS NULL`,
             waste_ids);
@@ -699,19 +720,21 @@ module.exports = async (req, res) => {
           const partnerId = rows[0].partner_id;
           const receiptRef = `RCPT-${partnerId}-${Date.now()}`;
 
-          const [ins] = await conn.query(
+          // WASTE_COLLECTION columns: collection_id, partner_id, slot_id, volunteer_id,
+          //   container_id, source_type, hub_id, vehicle_no, collected_at, weighed_kg, receipt_ref
+          const [cins] = await conn.query(
             `INSERT INTO WASTE_COLLECTION
               (partner_id, slot_id, volunteer_id, container_id,
                source_type, vehicle_no, weighed_kg, receipt_ref)
              VALUES (?, ?, ?, ?, 'DONOR_SITE', ?, ?, ?)`,
             [partnerId, slot_id, u.pid, container_id, vehicle_no, weighed_kg, receiptRef]);
-          const collectionId = ins.insertId;
+          const collectionId = cins.insertId;
 
-          // Link routings — trigger on WASTE_ROUTING will set status='COMPLETED'
+          // Set collection_id and status='COMPLETED' together to satisfy check constraints
           await conn.query(
             `UPDATE WASTE_ROUTING
-             SET collection_id = ?
-             WHERE routing_id IN (${placeholders}) AND status = 'PENDING'`,
+             SET collection_id = ?, status = 'COMPLETED'
+             WHERE waste_id IN (${placeholders}) AND status = 'PENDING'`,
             [collectionId, ...waste_ids]);
 
           await conn.commit();
@@ -728,8 +751,8 @@ module.exports = async (req, res) => {
       case "myCollections": {
         need("VOLUNTEER");
         return res.json(await q(
-          `SELECT wc.collection_id, wp.name AS partner_name, wc.weighed_kg,
-                  wc.receipt_ref, wc.collected_at
+          `SELECT wc.collection_id, wp.name AS partner_name,
+                  wc.weighed_kg, wc.receipt_ref, wc.collected_at
            FROM WASTE_COLLECTION wc
            JOIN WASTE_PARTNER wp ON wp.partner_id = wc.partner_id
            WHERE wc.volunteer_id = ?
