@@ -1,10 +1,12 @@
 /**
  * / — REPLATE split-screen login / register page.
  *
- * LEFT: logo, 3-way role tab (SlideTabs), blurb, login/register form.
- * RIGHT (≥900 px): food photo with gradient overlay, REPLATE wordmark, tagline.
+ * LEFT (left-aligned, max-w-[460px]): large REPLATE wordmark at top,
+ *   3-way role tab, form card with taller inputs, Browse hubs link.
+ * RIGHT (≥900 px): auto-cycling crossfade slideshow of food photos,
+ *   gradient overlay, REPLATE wordmark + tagline in white, dot indicators.
  *
- * No social logins, no "Forgot password?", no "Keep me logged in".
+ * Auth logic is unchanged — only layout and visuals change.
  */
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -13,7 +15,6 @@ import { call, type Role, type AuthResponse } from "@/lib/api";
 import { useAuth }    from "@/context/AuthContext";
 import { useToast }   from "@/context/ToastContext";
 import { SlideTabs }  from "@/components/ui/slide-tabs";
-import Logo           from "@/components/Logo";
 import ThemeToggle    from "@/components/ThemeToggle";
 import AboutDialog    from "@/components/AboutDialog";
 
@@ -46,18 +47,31 @@ const VROLES = [
   { value: "DUAL",       label: "Both"                              },
 ] as const;
 
+/** Slideshow photos — placed in /public/images/food/ */
+const SLIDES = [
+  "/images/food/burger.jpg",
+  "/images/food/grill-platter.jpg",
+  "/images/food/pizza.jpg",
+  "/images/food/south-indian-thali.jpg",
+];
+/** Fallback gradient when all images fail */
+const FALLBACK_GRADIENT =
+  "linear-gradient(135deg, #ff2d95 0%, #3b82f6 100%)";
+
 type Mode = "login" | "register";
 
 // ─── Form field primitives ────────────────────────────────────────────────────
 
+/** Taller inputs (52 px min-height) with 16-17 px text */
 const inputBase =
-  "w-full px-3.5 py-2.5 rounded-[var(--radius-md)] border border-border bg-card " +
-  "text-ink text-sm placeholder:text-muted " +
-  "focus:outline-none focus:border-pink focus:shadow-glow-pink transition-shadow";
+  "w-full px-4 rounded-[var(--radius-md)] border border-border bg-card " +
+  "text-ink text-[16px] placeholder:text-muted " +
+  "focus:outline-none focus:border-pink focus:shadow-glow-pink transition-shadow " +
+  "min-h-[52px]";
 
 function FieldLabel({ text, children }: { text: string; children: React.ReactNode }) {
   return (
-    <label className="flex flex-col gap-1.5 text-sm font-semibold text-ink mb-4">
+    <label className="flex flex-col gap-1.5 text-[15px] font-semibold text-ink mb-4">
       {text}
       {children}
     </label>
@@ -72,7 +86,6 @@ function Sel(props: React.SelectHTMLAttributes<HTMLSelectElement>) {
   return <select {...props} className={inputBase} />;
 }
 
-/** Password field with show/hide toggle */
 function PasswordInput({ name, placeholder, autoComplete }: {
   name: string; placeholder?: string; autoComplete?: string;
 }) {
@@ -86,7 +99,7 @@ function PasswordInput({ name, placeholder, autoComplete }: {
         minLength={6}
         placeholder={placeholder}
         autoComplete={autoComplete}
-        className={`${inputBase} pr-10`}
+        className={`${inputBase} pr-12`}
       />
       <button
         type="button"
@@ -95,8 +108,117 @@ function PasswordInput({ name, placeholder, autoComplete }: {
         className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-ink transition-colors"
         aria-label={show ? "Hide password" : "Show password"}
       >
-        {show ? <EyeOff size={16} /> : <Eye size={16} />}
+        {show ? <EyeOff size={18} /> : <Eye size={18} />}
       </button>
+    </div>
+  );
+}
+
+// ─── Slideshow component ──────────────────────────────────────────────────────
+
+function Slideshow() {
+  const [current,  setCurrent]  = useState(0);
+  const [failed,   setFailed]   = useState<Set<number>>(new Set());
+  const [hovering, setHovering] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const workingSlides = SLIDES.filter((_, i) => !failed.has(i));
+
+  const advance = () => {
+    setCurrent(c => {
+      const next = (c + 1) % SLIDES.length;
+      // skip failed
+      return SLIDES.findIndex((_, i) => !failed.has(i) && i > next) !== -1
+        ? next
+        : SLIDES.findIndex((_, i) => !failed.has(i)) ?? 0;
+    });
+  };
+
+  useEffect(() => {
+    if (hovering || workingSlides.length < 2) return;
+    timerRef.current = setInterval(advance, 4000);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [hovering, failed]);
+
+  const allFailed = workingSlides.length === 0;
+
+  return (
+    <div
+      className="relative w-full h-full"
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
+    >
+      {/* Fallback gradient underneath */}
+      <div className="absolute inset-0" style={{ background: FALLBACK_GRADIENT }} />
+
+      {/* Images — crossfade via opacity transition */}
+      {!allFailed && SLIDES.map((src, i) => (
+        <img
+          key={src}
+          src={src}
+          alt=""
+          onError={() => setFailed(f => new Set([...f, i]))}
+          className="absolute inset-0 w-full h-full object-cover transition-opacity duration-1000"
+          style={{ opacity: i === current && !failed.has(i) ? 1 : 0 }}
+        />
+      ))}
+
+      {/* Gradient overlay — strong at bottom for text legibility */}
+      <div
+        className="absolute inset-0"
+        style={{
+          background:
+            "linear-gradient(to top, rgba(0,0,0,0.88) 0%, rgba(0,0,0,0.45) 45%, rgba(0,0,0,0.15) 100%)",
+        }}
+      />
+
+      {/* Bottom content */}
+      <div className="absolute bottom-0 inset-x-0 p-10 pb-10 select-none z-10">
+        {/* Wordmark */}
+        <p
+          className="font-black tracking-tight leading-none mb-3"
+          style={{
+            fontSize: "clamp(3rem, 5vw, 4.5rem)",
+            color: "#ffffff",
+            textShadow: "0 2px 28px rgba(0,0,0,0.6)",
+          }}
+        >
+          REPLATE
+        </p>
+        {/* Tagline — fully white, high contrast */}
+        <p
+          className="font-medium leading-snug max-w-xs"
+          style={{ fontSize: "1.05rem", color: "rgba(255,255,255,0.92)" }}
+        >
+          Good food should reach a plate, not a bin.
+        </p>
+
+        {/* Dot indicators */}
+        {workingSlides.length > 1 && (
+          <div className="flex gap-2 mt-5">
+            {SLIDES.map((_, i) => {
+              if (failed.has(i)) return null;
+              return (
+                <button
+                  key={i}
+                  onClick={() => setCurrent(i)}
+                  aria-label={`Slide ${i + 1}`}
+                  className="transition-all rounded-full"
+                  style={{
+                    width:  i === current ? 20 : 8,
+                    height: 8,
+                    background: i === current
+                      ? "rgba(255,255,255,0.95)"
+                      : "rgba(255,255,255,0.40)",
+                    border: "none",
+                    cursor: "pointer",
+                  }}
+                />
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -109,13 +231,11 @@ export default function Home() {
   const navigate    = useNavigate();
   const formRef     = useRef<HTMLFormElement>(null);
 
-  const [role,     setRole]    = useState<Role>("DONOR");
-  const [mode,     setMode]    = useState<Mode>("login");
-  const [busy,     setBusy]    = useState(false);
+  const [role,      setRole]     = useState<Role>("DONOR");
+  const [mode,      setMode]     = useState<Mode>("login");
+  const [busy,      setBusy]     = useState(false);
   const [inlineErr, setInlineErr] = useState("");
-  const [imgErr,   setImgErr]  = useState(false);
 
-  // Already logged in → bounce
   useEffect(() => {
     if (!authLoading && user) navigate(ROLE_HOME[user.role], { replace: true });
   }, [user, authLoading, navigate]);
@@ -123,7 +243,6 @@ export default function Home() {
   const switchRole = (r: Role) => { setRole(r); setMode("login"); setInlineErr(""); };
   const switchMode = (m: Mode) => { setMode(m); setInlineErr(""); };
 
-  // ── Validate ─────────────────────────────────────────────────────────────────
   const validate = (fd: FormData): string => {
     const email = fd.get("email") as string;
     const pw    = fd.get("password") as string;
@@ -138,7 +257,6 @@ export default function Home() {
     return "";
   };
 
-  // ── Submit ────────────────────────────────────────────────────────────────────
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const fd  = new FormData(e.currentTarget);
@@ -191,123 +309,134 @@ export default function Home() {
   if (user)        return null;
 
   return (
-    // full-viewport split, no top-bar padding here — this page is outside Layout
     <div className="min-h-screen flex bg-bg overflow-hidden">
 
-      {/* Theme toggle — fixed top-right */}
-      <div className="fixed top-2 right-3 z-40">
-        <ThemeToggle />
-      </div>
+      {/* Utilities — fixed */}
+      <div className="fixed top-2 right-3 z-40"><ThemeToggle /></div>
+      <div className="fixed bottom-4 left-4 z-30"><AboutDialog /></div>
 
-      {/* About us — fixed bottom-left */}
-      <div className="fixed bottom-4 left-4 z-30">
-        <AboutDialog />
-      </div>
+      {/* ═══════════════════ LEFT PANEL ═════════════════════════════════════ */}
+      <style>{`
+        .rp-left {
+          display: flex;
+          flex-direction: column;
+          flex: 1 1 0;
+          min-width: 0;
+          overflow-y: auto;
+          padding: 48px 40px 64px 48px;
+          justify-content: flex-start;
+        }
+        .rp-form-inner {
+          width: 100%;
+          max-width: 460px;
+        }
+        @media (min-width: 900px) {
+          .rp-left {
+            flex: 0 0 auto;
+            width: 52%;
+            max-width: 560px;
+          }
+        }
+        @media (max-width: 600px) {
+          .rp-left { padding: 32px 20px 48px; }
+        }
+      `}</style>
 
-      {/* ═══════════════════════════════ LEFT ═══════════════════════════════ */}
-      <div className="flex-1 flex flex-col justify-center px-8 py-12 overflow-y-auto min-w-0">
-        <div className="mx-auto w-full max-w-sm">
+      <div className="rp-left">
+        <div className="rp-form-inner">
 
-          {/* Logo */}
-          <div className="mb-8">
-            <Logo />
+          {/* ── Large REPLATE wordmark ── */}
+          <div className="mb-10 mt-2">
+            <h1
+              className="font-black tracking-tight leading-none"
+              style={{
+                fontSize: "clamp(2.8rem, 6vw, 4rem)",
+                background: "linear-gradient(90deg, var(--color-pink), var(--color-blue))",
+                WebkitBackgroundClip: "text",
+                WebkitTextFillColor: "transparent",
+                backgroundClip: "text",
+              }}
+            >
+              REPLATE
+            </h1>
+            <p className="text-muted text-sm mt-2">
+              Good food should reach a plate, not a bin.
+            </p>
           </div>
 
-          {/* Role tab */}
+          {/* ── Role tab ── */}
           <SlideTabs
             tabs={TABS}
             selected={role}
             onChange={id => switchRole(id as Role)}
           />
-          <p className="mt-3 mb-7 text-xs text-muted min-h-[1.2em]">
+          <p className="mt-3 mb-7 text-sm text-muted min-h-[1.2em]">
             {BLURBS[role]}
           </p>
 
-          {/* Form card */}
-          <div className="rounded-2xl border border-border bg-card shadow-md p-6">
+          {/* ── Form card ── */}
+          <div className="rounded-2xl border border-border bg-card shadow-lg p-7">
 
             <form ref={formRef} onSubmit={handleSubmit} noValidate>
 
-              {/* ── Register-only fields ─────────────────────────────────── */}
+              {/* Register-only fields */}
               {mode === "register" && (
                 <div className="flex flex-col">
                   <FieldLabel text="Name">
                     <Inp name="name" required placeholder="Organisation or full name" />
                   </FieldLabel>
-
                   <FieldLabel text="Phone">
                     <Inp name="phone" required inputMode="tel" placeholder="10-digit mobile number" />
                   </FieldLabel>
 
-                  {role === "DONOR" && (
-                    <>
-                      <FieldLabel text="Donor type">
-                        <Sel name="type">
-                          {DONOR_TYPES.map(t => (
-                            <option key={t} value={t}>{t.replace(/_/g, " ")}</option>
-                          ))}
-                        </Sel>
-                      </FieldLabel>
-                      <FieldLabel text="Address">
-                        <Inp name="address" required placeholder="Street address, city" />
-                      </FieldLabel>
-                    </>
-                  )}
+                  {role === "DONOR" && (<>
+                    <FieldLabel text="Donor type">
+                      <Sel name="type">
+                        {DONOR_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
+                      </Sel>
+                    </FieldLabel>
+                    <FieldLabel text="Address">
+                      <Inp name="address" required placeholder="Street address, city" />
+                    </FieldLabel>
+                  </>)}
 
-                  {role === "RECIPIENT" && (
-                    <>
-                      <FieldLabel text="Organisation type">
-                        <Sel name="type">
-                          {RECIPIENT_TYPES.map(t => (
-                            <option key={t} value={t}>{t.replace(/_/g, " ")}</option>
-                          ))}
-                        </Sel>
-                      </FieldLabel>
-                      <FieldLabel text="Address">
-                        <Inp name="address" required placeholder="Street address, city" />
-                      </FieldLabel>
-                      <FieldLabel text="Daily capacity (kg)">
-                        <Inp name="daily_capacity" type="number" min="1" defaultValue="50" required />
-                      </FieldLabel>
-                      <label className="flex items-center gap-2.5 mb-4 cursor-pointer text-sm font-medium text-ink">
-                        <input
-                          type="checkbox"
-                          name="has_cold_storage"
-                          className="w-4 h-4 accent-[var(--color-pink)] rounded"
-                        />
-                        Has cold storage
-                      </label>
-                    </>
-                  )}
+                  {role === "RECIPIENT" && (<>
+                    <FieldLabel text="Organisation type">
+                      <Sel name="type">
+                        {RECIPIENT_TYPES.map(t => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
+                      </Sel>
+                    </FieldLabel>
+                    <FieldLabel text="Address">
+                      <Inp name="address" required placeholder="Street address, city" />
+                    </FieldLabel>
+                    <FieldLabel text="Daily capacity (kg)">
+                      <Inp name="daily_capacity" type="number" min="1" defaultValue="50" required />
+                    </FieldLabel>
+                    <label className="flex items-center gap-2.5 mb-4 cursor-pointer text-[15px] font-medium text-ink">
+                      <input type="checkbox" name="has_cold_storage"
+                        className="w-4 h-4 rounded" style={{ accentColor: "var(--color-pink)" }} />
+                      Has cold storage
+                    </label>
+                  </>)}
 
-                  {role === "VOLUNTEER" && (
-                    <>
-                      <FieldLabel text="Vehicle">
-                        <Sel name="vehicle_type">
-                          {VEHICLE_TYPES.map(v => <option key={v} value={v}>{v}</option>)}
-                        </Sel>
-                      </FieldLabel>
-                      <FieldLabel text="Volunteer role">
-                        <Sel name="vrole">
-                          {VROLES.map(v => (
-                            <option key={v.value} value={v.value}>{v.label}</option>
-                          ))}
-                        </Sel>
-                      </FieldLabel>
-                    </>
-                  )}
+                  {role === "VOLUNTEER" && (<>
+                    <FieldLabel text="Vehicle">
+                      <Sel name="vehicle_type">
+                        {VEHICLE_TYPES.map(v => <option key={v} value={v}>{v}</option>)}
+                      </Sel>
+                    </FieldLabel>
+                    <FieldLabel text="Volunteer role">
+                      <Sel name="vrole">
+                        {VROLES.map(v => <option key={v.value} value={v.value}>{v.label}</option>)}
+                      </Sel>
+                    </FieldLabel>
+                  </>)}
                 </div>
               )}
 
-              {/* ── Common fields ────────────────────────────────────────── */}
+              {/* Common fields */}
               <FieldLabel text="Email">
-                <Inp
-                  name="email"
-                  type="email"
-                  required
-                  placeholder="you@example.com"
-                  autoComplete="email"
-                />
+                <Inp name="email" type="email" required placeholder="you@example.com" autoComplete="email" />
               </FieldLabel>
 
               <FieldLabel text="Password">
@@ -318,57 +447,47 @@ export default function Home() {
                 />
               </FieldLabel>
 
-              {/* Inline error */}
               {inlineErr && (
-                <p className="text-xs text-error mb-3" role="alert">{inlineErr}</p>
+                <p className="text-sm text-error mb-3 -mt-1" role="alert">{inlineErr}</p>
               )}
 
-              {/* Submit */}
+              {/* Submit button — taller and bigger text */}
               <button
                 type="submit"
                 disabled={busy}
-                className="w-full py-2.5 rounded-[var(--radius-md)] bg-pink text-white font-bold text-sm shadow-glow-pink hover:brightness-110 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                className="w-full rounded-[var(--radius-md)] bg-pink text-white font-bold shadow-glow-pink hover:brightness-110 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+                style={{ minHeight: 52, fontSize: 17 }}
               >
-                {busy && <Loader2 size={14} className="animate-spin" />}
-                {busy
-                  ? "Please wait…"
-                  : mode === "login" ? "Log in" : "Create account"
-                }
+                {busy && <Loader2 size={16} className="animate-spin" />}
+                {busy ? "Please wait…" : mode === "login" ? "Log in" : "Create account"}
               </button>
 
             </form>
 
             {/* Mode toggle */}
-            <p className="mt-4 text-center text-xs text-muted">
-              {mode === "login" ? (
-                <>Not a member yet?{" "}
-                  <button onClick={() => switchMode("register")} className="font-semibold text-pink hover:underline">
-                    Register
-                  </button>
-                </>
-              ) : (
-                <>Already a member?{" "}
-                  <button onClick={() => switchMode("login")} className="font-semibold text-pink hover:underline">
-                    Log in
-                  </button>
-                </>
-              )}
+            <p className="mt-5 text-center text-sm text-muted">
+              {mode === "login" ? (<>
+                Not a member yet?{" "}
+                <button onClick={() => switchMode("register")}
+                  className="font-semibold text-pink hover:underline">Register</button>
+              </>) : (<>
+                Already a member?{" "}
+                <button onClick={() => switchMode("login")}
+                  className="font-semibold text-pink hover:underline">Log in</button>
+              </>)}
             </p>
           </div>
 
-          {/* Browse hubs link */}
-          <p className="mt-5 text-center text-xs text-muted">
+          {/* Browse hubs */}
+          <p className="mt-5 text-center text-sm text-muted">
             Just browsing?{" "}
-            <Link to="/hub" className="font-semibold text-blue hover:underline">
-              Browse hubs
-            </Link>
+            <Link to="/hub" className="font-semibold text-blue hover:underline">Browse hubs</Link>
           </p>
 
         </div>
       </div>
 
-      {/* ═══════════════════════════════ RIGHT ══════════════════════════════ */}
-      {/* Hidden below 900 px — shown via scoped style */}
+      {/* ═══════════════════ RIGHT PANEL — slideshow ════════════════════════ */}
       <style>{`
         .rp-right {
           display: none;
@@ -376,53 +495,16 @@ export default function Home() {
         @media (min-width: 900px) {
           .rp-right {
             display: flex;
-            width: 480px;
-            min-width: 420px;
-            flex-shrink: 0;
-            padding: 24px 24px 24px 0;
-            flex-direction: column;
+            flex: 1 1 0;
+            min-width: 0;
+            padding: 20px 20px 20px 0;
           }
         }
       `}</style>
 
       <div className="rp-right" aria-hidden="true">
-        {/* Photo or gradient fallback */}
-        <div
-          className="relative flex-1 rounded-3xl overflow-hidden flex flex-col justify-end"
-        >
-          {/* Background */}
-          {!imgErr ? (
-            <img
-              src="/images/login-food.jpg"
-              alt=""
-              onError={() => setImgErr(true)}
-              className="absolute inset-0 w-full h-full object-cover"
-            />
-          ) : (
-            <div
-              className="absolute inset-0"
-              style={{ background: "linear-gradient(135deg, var(--color-pink) 0%, var(--color-blue) 100%)" }}
-            />
-          )}
-
-          {/* Dark gradient overlay — bottom */}
-          <div
-            className="absolute inset-0"
-            style={{ background: "linear-gradient(to top, rgba(0,0,0,0.82) 0%, rgba(0,0,0,0.35) 55%, transparent 100%)" }}
-          />
-
-          {/* Wordmark + tagline */}
-          <div className="relative z-10 p-10 pb-12 select-none">
-            <p
-              className="text-6xl font-black text-white tracking-tight leading-none mb-3"
-              style={{ textShadow: "0 2px 24px rgba(0,0,0,0.5)" }}
-            >
-              REPLATE
-            </p>
-            <p className="text-white/75 text-base font-medium leading-snug max-w-xs">
-              Good food should reach a plate, not a bin.
-            </p>
-          </div>
+        <div className="relative flex-1 rounded-3xl overflow-hidden">
+          <Slideshow />
         </div>
       </div>
 
