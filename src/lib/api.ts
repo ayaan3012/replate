@@ -253,6 +253,7 @@ export interface Compartment {
   compartment_id: number;
   label:          string;
   temp_controlled: number;   // 0 | 1
+  max_weight_kg:  string | number;
   free_kg:        string | number;
   accepting:      number;    // 0 | 1
 }
