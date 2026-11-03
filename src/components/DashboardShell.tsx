@@ -146,14 +146,8 @@ export default function DashboardShell({ role, children, title, subtitle }: Prop
             {!collapsed && <span>Hub screen</span>}
           </Link>
 
-          {/* About us — inline trigger */}
-          <div className={collapsed ? "flex justify-center" : ""}>
-            <div className="w-full">
-              <div className={collapsed ? "flex justify-center" : ""}>
-                <AboutDialog inline={collapsed} />
-              </div>
-            </div>
-          </div>
+          {/* About us — inline trigger in sidebar */}
+          <AboutDialog inline={true} />
 
           <button
             onClick={handleLogout}
@@ -175,7 +169,10 @@ export default function DashboardShell({ role, children, title, subtitle }: Prop
           "flex items-center gap-2.5 rounded-lg px-2 py-2",
           collapsed ? "justify-center" : "",
         ].join(" ")}>
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-pink to-blue text-xs font-bold text-white">
+          <div
+            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold"
+            style={{ background: "linear-gradient(135deg, var(--color-primary), var(--color-accent))", color: "#fff" }}
+          >
             {initials}
           </div>
           {!collapsed && user && (
@@ -238,14 +235,21 @@ export default function DashboardShell({ role, children, title, subtitle }: Prop
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
-          <main className="px-6 pb-24 pt-6 max-w-5xl mx-auto">
+          <main className="relative px-8 pb-28 pt-8 max-w-content mx-auto">
+            {/* Decorative logo watermark */}
+            <img
+              src="/images/replate-logo.png"
+              alt=""
+              aria-hidden
+              className="logo-watermark"
+            />
             {children}
           </main>
         </div>
       </div>
 
-      {/* About us — fixed bottom-left on every page */}
-      <div className="fixed bottom-4 left-4 z-30">
+      {/* ONE About us button — fixed bottom-left */}
+      <div className="fixed bottom-5 left-5 z-30">
         <AboutDialog />
       </div>
     </div>

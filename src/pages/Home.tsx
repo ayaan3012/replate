@@ -54,9 +54,6 @@ const SLIDES = [
   "/images/food/pizza.jpg",
   "/images/food/south-indian-thali.jpg",
 ];
-/** Fallback gradient when all images fail */
-const FALLBACK_GRADIENT =
-  "linear-gradient(135deg, #ff2d95 0%, #3b82f6 100%)";
 
 type Mode = "login" | "register";
 
@@ -149,7 +146,7 @@ function Slideshow() {
       onMouseLeave={() => setHovering(false)}
     >
       {/* Fallback gradient underneath */}
-      <div className="absolute inset-0" style={{ background: FALLBACK_GRADIENT }} />
+      <div className="absolute inset-0" style={{ background: "linear-gradient(135deg, var(--color-primary) 0%, var(--color-accent) 100%)" }} />
 
       {/* Images — crossfade via opacity transition */}
       {!allFailed && SLIDES.map((src, i) => (
@@ -344,17 +341,17 @@ export default function Home() {
 
       <div className="rp-left">
         <div className="rp-form-inner">
+          {/* Decorative logo watermark */}
+          <img src="/images/replate-logo.png" alt="" aria-hidden className="logo-watermark" />
 
           {/* ── Large REPLATE wordmark ── */}
           <div className="mb-10 mt-2">
             <h1
-              className="font-black tracking-tight leading-none"
+              className="font-brand font-black tracking-tight leading-none"
               style={{
-                fontSize: "clamp(2.8rem, 6vw, 4rem)",
-                background: "linear-gradient(90deg, var(--color-pink), var(--color-blue))",
-                WebkitBackgroundClip: "text",
-                WebkitTextFillColor: "transparent",
-                backgroundClip: "text",
+                fontFamily: "var(--font-brand)",
+                fontSize: "clamp(3rem, 6vw, 4.5rem)",
+                color: "var(--color-primary)",
               }}
             >
               REPLATE

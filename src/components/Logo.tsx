@@ -1,23 +1,41 @@
 /**
- * Logo — rounded square with a Leaf icon + "REPLATE" wordmark.
- * Collapses to just the icon when `collapsed` is true.
+ * Logo — replate-logo.png + "REPLATE" wordmark in Fraunces.
+ * Collapses to just the image when `collapsed` is true.
  */
-import { Leaf } from "lucide-react";
-
 export default function Logo({ collapsed = false }: { collapsed?: boolean }) {
   return (
-    <div className="flex items-center gap-2 shrink-0">
-      <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-pink to-blue shadow-sm">
-        <Leaf size={16} className="text-white" strokeWidth={2.5} />
+    <div className="flex items-center gap-2.5 shrink-0">
+      {/* Logo image — falls back to coloured square */}
+      <img
+        src="/images/replate-logo.png"
+        alt="REPLATE"
+        width={32}
+        height={32}
+        className="shrink-0 rounded-lg object-contain"
+        style={{ imageRendering: "crisp-edges" }}
+        onError={e => {
+          // fallback: hide broken img, show coloured square
+          (e.target as HTMLImageElement).style.display = "none";
+          const next = (e.target as HTMLImageElement).nextElementSibling as HTMLElement | null;
+          if (next) next.style.display = "flex";
+        }}
+      />
+      {/* Fallback square — hidden by default */}
+      <div
+        className="shrink-0 h-8 w-8 items-center justify-center rounded-lg text-white text-xs font-black hidden"
+        style={{ background: "linear-gradient(135deg, var(--color-primary), var(--color-accent))" }}
+        aria-hidden
+      >
+        R
       </div>
+
       {!collapsed && (
         <span
-          className="text-sm font-bold tracking-tight text-ink whitespace-nowrap"
+          className="font-brand font-black tracking-tight text-ink whitespace-nowrap leading-none"
           style={{
-            background: "linear-gradient(90deg, var(--color-pink), var(--color-blue))",
-            WebkitBackgroundClip: "text",
-            WebkitTextFillColor: "transparent",
-            backgroundClip: "text",
+            fontSize: "1.2rem",
+            color: "var(--color-primary)",
+            fontFamily: "var(--font-brand)",
           }}
         >
           REPLATE

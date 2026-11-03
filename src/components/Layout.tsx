@@ -16,8 +16,8 @@ export default function Layout({ children }: Props) {
       <main className="pt-6 pb-24 max-w-4xl mx-auto px-4">
         {children}
       </main>
-      {/* About us — fixed bottom-left on every page */}
-      <div className="fixed bottom-4 left-4 z-30">
+      {/* ONE About us button — fixed bottom-left */}
+      <div className="fixed bottom-5 left-5 z-30">
         <AboutDialog />
       </div>
     </>
