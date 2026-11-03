@@ -1,16 +1,12 @@
 /**
  * DashboardShell — sidebar + main area for /donor, /order, /volunteer.
- *
- * Sidebar: logo + REPLATE, collapse toggle, WORKSPACE section (role items),
- * MORE section (Hub screen, About us, Log out), user card at the bottom.
- * On mobile: sidebar becomes a slide-in drawer toggled by a hamburger.
  */
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   LayoutDashboard, PackageOpen, Truck, AlertTriangle, ClipboardList,
   UtensilsCrossed, MapPin, ShoppingBag,
-  Bike, Trash2, History, ExternalLink, Info, LogOut,
+  Bike, Trash2, History, ExternalLink, LogOut,
   ChevronLeft, Menu, X,
   type LucideIcon,
 } from "lucide-react";
@@ -18,11 +14,10 @@ import { useAuth }      from "@/context/AuthContext";
 import { useToast }     from "@/context/ToastContext";
 import type { Role }     from "@/lib/api";
 import type { ReactNode } from "react";
-import Logo              from "@/components/Logo";
 import ThemeToggle       from "@/components/ThemeToggle";
 import AboutDialog       from "@/components/AboutDialog";
 
-// ─── Nav config ──────────────────────────────────────────────────────────────
+// ─── Nav config ───────────────────────────────────────────────────────────────
 
 interface NavItem { id: string; label: string; icon: LucideIcon }
 
@@ -44,7 +39,7 @@ const NAV: Record<Role, NavItem[]> = {
     { id: "overview",        label: "Overview",        icon: LayoutDashboard },
     { id: "food-deliveries", label: "Food deliveries", icon: Bike },
     { id: "waste-runs",      label: "Waste runs",      icon: Trash2 },
-    { id: "my-history",      label: "History",        icon: History },
+    { id: "my-history",      label: "History",         icon: History },
   ],
 };
 
@@ -55,9 +50,8 @@ const ROLE_LABEL: Record<Role, string> = {
 // ─── Component ────────────────────────────────────────────────────────────────
 
 interface Props {
-  role:     Role;
-  children: ReactNode;
-  /** Page title shown in the main header */
+  role:      Role;
+  children:  ReactNode;
   title?:    string;
   subtitle?: string;
 }
@@ -66,8 +60,8 @@ export default function DashboardShell({ role, children, title, subtitle }: Prop
   const { user, logout } = useAuth();
   const { toast }        = useToast();
   const navigate         = useNavigate();
-  const [collapsed, setCollapsed] = useState(false);
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [collapsed,   setCollapsed]   = useState(false);
+  const [mobileOpen,  setMobileOpen]  = useState(false);
 
   const handleLogout = async () => {
     try { await logout(); navigate("/"); }
@@ -75,34 +69,68 @@ export default function DashboardShell({ role, children, title, subtitle }: Prop
   };
 
   const items = NAV[role];
-  const initials = (user?.name ?? "?")
-    .split(" ").slice(0, 2).map(w => w[0]).join("").toUpperCase();
 
+  // ── Sidebar logo ─────────────────────────────────────────────────────────────
+  // Full-width logo when expanded, smaller square when collapsed.
+  const SidebarLogo = (
+    <Link
+      to="/"
+      className="flex items-center justify-center shrink-0 overflow-hidden"
+      style={{
+        padding: collapsed ? "12px 8px" : "16px 12px",
+        minHeight: collapsed ? 64 : 100,
+      }}
+      title="REPLATE home"
+    >
+      <img
+        src="/images/replate-logo.png"
+        alt="REPLATE"
+        className="object-contain w-full"
+        style={{
+          maxWidth: collapsed ? 40 : 160,
+          height:   "auto",
+          display:  "block",
+        }}
+        onError={e => {
+          // Fallback: hide broken img, show text wordmark
+          (e.target as HTMLImageElement).style.display = "none";
+        }}
+      />
+    </Link>
+  );
+
+  // ── Sidebar content (shared between desktop aside and mobile drawer) ─────────
   const sidebarContent = (
     <>
-      {/* Header — logo + collapse toggle */}
-      <div className="flex items-center gap-2 h-14 px-3 border-b border-border shrink-0">
-        <Logo collapsed={collapsed} />
+      {/* Logo */}
+      <div className="shrink-0 border-b border-border">
+        {SidebarLogo}
+      </div>
+
+      {/* Collapse toggle (desktop only) + mobile close */}
+      <div className={[
+        "flex items-center shrink-0 border-b border-border px-2 py-1",
+        collapsed ? "justify-center" : "justify-end",
+      ].join(" ")}>
         <button
           onClick={() => setCollapsed(c => !c)}
           aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-          className="ml-auto shrink-0 p-1.5 rounded-lg text-muted hover:text-ink hover:bg-border transition-colors hidden lg:block"
+          className="p-1.5 rounded-lg text-muted hover:text-ink hover:bg-border transition-colors hidden lg:block"
         >
-          {collapsed ? <Menu size={16} /> : <ChevronLeft size={16} />}
+          {collapsed ? <Menu size={15} /> : <ChevronLeft size={15} />}
         </button>
-        {/* Mobile close */}
         <button
           onClick={() => setMobileOpen(false)}
-          className="ml-auto p-1.5 rounded-lg text-muted hover:text-ink lg:hidden"
+          className="p-1.5 rounded-lg text-muted hover:text-ink lg:hidden"
         >
-          <X size={16} />
+          <X size={15} />
         </button>
       </div>
 
-      {/* Nav sections */}
+      {/* Nav */}
       <nav className="flex-1 overflow-y-auto py-3 px-2">
-        {/* WORKSPACE */}
-        {collapsed ? null : (
+        {/* WORKSPACE section label */}
+        {!collapsed && (
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted px-3 mb-1">
             Workspace
           </p>
@@ -126,13 +154,14 @@ export default function DashboardShell({ role, children, title, subtitle }: Prop
           ))}
         </div>
 
-        {/* MORE */}
-        {collapsed ? null : (
+        {/* MORE section label */}
+        {!collapsed && (
           <p className="text-[10px] font-semibold uppercase tracking-wider text-muted px-3 mb-1">
             More
           </p>
         )}
         <div className="flex flex-col gap-px">
+          {/* Hub screen */}
           <Link
             to="/hub"
             onClick={() => setMobileOpen(false)}
@@ -146,9 +175,7 @@ export default function DashboardShell({ role, children, title, subtitle }: Prop
             {!collapsed && <span>Hub screen</span>}
           </Link>
 
-          {/* About us — inline trigger in sidebar */}
-          <AboutDialog inline={true} />
-
+          {/* Log out */}
           <button
             onClick={handleLogout}
             className={[
@@ -162,27 +189,7 @@ export default function DashboardShell({ role, children, title, subtitle }: Prop
           </button>
         </div>
       </nav>
-
-      {/* User card */}
-      <div className="shrink-0 border-t border-border p-2">
-        <div className={[
-          "flex items-center gap-2.5 rounded-lg px-2 py-2",
-          collapsed ? "justify-center" : "",
-        ].join(" ")}>
-          <div
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold"
-            style={{ background: "linear-gradient(135deg, var(--color-primary), var(--color-accent))", color: "#fff" }}
-          >
-            {initials}
-          </div>
-          {!collapsed && user && (
-            <div className="min-w-0">
-              <p className="text-xs font-semibold text-ink truncate">{user.name}</p>
-              <p className="text-xs text-muted">{ROLE_LABEL[role]}</p>
-            </div>
-          )}
-        </div>
-      </div>
+      {/* No user card here — user info is in the top bar */}
     </>
   );
 
@@ -192,7 +199,8 @@ export default function DashboardShell({ role, children, title, subtitle }: Prop
       {/* Desktop sidebar */}
       <aside
         className={[
-          "relative flex flex-col shrink-0 border-r border-border bg-card transition-[width] duration-200 ease-out overflow-hidden hidden lg:flex",
+          "relative flex flex-col shrink-0 border-r border-border bg-card",
+          "transition-[width] duration-200 ease-out overflow-hidden hidden lg:flex",
           collapsed ? "w-16" : "w-60",
         ].join(" ")}
       >
@@ -214,7 +222,8 @@ export default function DashboardShell({ role, children, title, subtitle }: Prop
 
       {/* Main area */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Top bar */}
+
+        {/* Top bar — user name + role on the right */}
         <header className="sticky top-0 z-10 flex items-center gap-3 h-14 px-6 bg-bg border-b border-border shrink-0">
           {/* Mobile hamburger */}
           <button
@@ -224,19 +233,37 @@ export default function DashboardShell({ role, children, title, subtitle }: Prop
             <Menu size={18} />
           </button>
 
+          {/* Page title */}
           <div className="min-w-0">
-            {title && <h1 className="text-sm font-bold text-ink truncate">{title}</h1>}
+            {title    && <h1 className="text-sm font-bold text-ink truncate">{title}</h1>}
             {subtitle && <p className="text-xs text-muted truncate">{subtitle}</p>}
           </div>
 
           <span className="flex-1" />
+
+          {/* User name + role */}
+          {user && (
+            <div className="hidden sm:flex items-center gap-2 text-right shrink-0">
+              <div className="leading-tight">
+                <p className="text-xs font-semibold text-ink truncate max-w-[140px]">{user.name}</p>
+                <p className="text-xs text-muted">{ROLE_LABEL[role]}</p>
+              </div>
+              <div
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-bold text-white"
+                style={{ background: "linear-gradient(135deg, var(--color-primary), var(--color-accent))" }}
+              >
+                {(user.name ?? "?").split(" ").slice(0,2).map(w => w[0]).join("").toUpperCase()}
+              </div>
+            </div>
+          )}
+
           <ThemeToggle />
         </header>
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto">
           <main className="relative px-8 pb-28 pt-8 max-w-content mx-auto">
-            {/* Decorative logo watermark */}
+            {/* Decorative watermark */}
             <img
               src="/images/replate-logo.png"
               alt=""

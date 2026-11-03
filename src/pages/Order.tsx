@@ -1075,18 +1075,18 @@ function OrderInner() {
   return (
     <DashboardShell role="RECIPIENT" title="Order food" subtitle="Browse available donations">
       <OverviewSection />
+      <FindFoodSection
+        filterHubId={filterHubId}
+        setFilterHubId={setFilterHubId}
+        allHubs={allHubs}
+        reloadOrders={reloadOrders}
+      />
       <HubsMapSection
         profile={profile}
         filterHubId={filterHubId}
         setFilterHubId={setFilterHubId}
         allHubs={allHubs}
         setAllHubs={setAllHubs}
-      />
-      <FindFoodSection
-        filterHubId={filterHubId}
-        setFilterHubId={setFilterHubId}
-        allHubs={allHubs}
-        reloadOrders={reloadOrders}
       />
       <MyOrdersSection triggerReload={ordersVersion} />
     </DashboardShell>
