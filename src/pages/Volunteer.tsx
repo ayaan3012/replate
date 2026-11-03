@@ -1,23 +1,33 @@
 /**
- * /volunteer — full volunteer dashboard
+ * /volunteer — volunteer dashboard
  *
- * Tabs depend on vrole (FOOD_ONLY → Food deliveries; WASTE_ONLY → Waste runs;
- * DUAL → both), plus "My history" always shown.
+ * Tabs (shown based on vrole):
+ *   FOOD_ONLY : [Food deliveries, History]
+ *   WASTE_ONLY: [Waste runs, History]
+ *   DUAL      : [Food deliveries, Waste runs, History]
  */
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
-  Utensils, Leaf, Wind, Check, ChevronDown, Loader2, AlertCircle,
-  MapPin, Truck, Trash2, Package, ClipboardList,
+  Bike, AlertCircle, Check, Copy, ChevronDown, ChevronUp,
+  Loader2, X, Package, Truck, CheckCircle2, Clock,
+  MapPin, Weight, Trash2, History,
 } from "lucide-react";
 import {
-  call, n, type VolunteerProfile, type VolunteerImpact,
-  type Job, type Pickup, type WasteJob, type WasteSlot,
-  type Container, type CollectResponse, type Collection,
+  call, n,
+  type VolunteerProfile,
+  type VolunteerImpact,
+  type Job,
+  type Pickup,
+  type WasteJob,
+  type WasteSlot,
+  type Container,
+  type CollectResponse,
+  type Collection,
 } from "@/lib/api";
-import { useToast }      from "@/context/ToastContext";
-import DashboardShell    from "@/components/DashboardShell";
+import { useToast } from "@/context/ToastContext";
+import DashboardShell from "@/components/DashboardShell";
 
-// ─── shared primitives ────────────────────────────────────────────────────────
+// ─── Shared helpers ───────────────────────────────────────────────────────────
 
 function Skeleton({ className = "" }: { className?: string }) {
   return <div className={`animate-pulse rounded bg-border ${className}`} />;
@@ -25,7 +35,7 @@ function Skeleton({ className = "" }: { className?: string }) {
 
 function EmptyState({ message }: { message: string }) {
   return (
-    <div className="flex flex-col items-center gap-2 py-12 text-muted">
+    <div className="flex flex-col items-center gap-2 py-10 text-muted">
       <AlertCircle size={28} className="opacity-40" />
       <p className="text-sm">{message}</p>
     </div>
@@ -34,609 +44,1049 @@ function EmptyState({ message }: { message: string }) {
 
 function StatusBadge({ status }: { status: string }) {
   const map: Record<string, string> = {
-    DELIVERED:   "bg-success-tint text-success",
-    IN_TRANSIT:  "bg-blue-tint text-blue",
-    ACCEPTED:    "bg-pink-tint text-pink",
-    FAILED:      "bg-error-tint text-error",
-    COMPLETED:   "bg-success-tint text-success",
-    PENDING:     "bg-border text-muted",
+    DELIVERED:    "bg-success-tint text-success",
+    IN_TRANSIT:   "bg-blue-tint text-blue",
+    ACCEPTED:     "bg-pink-tint text-pink",
+    SCHEDULED:    "bg-pink-tint text-pink",
+    FAILED:       "bg-error-tint text-error",
+    PENDING:      "bg-border text-muted",
+    COMPLETED:    "bg-success-tint text-success",
+    CANCELLED:    "bg-border text-muted",
   };
+  const cls = map[status] ?? "bg-border text-muted";
   return (
-    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${map[status] ?? "bg-border text-muted"}`}>
-      {status}
+    <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${cls}`}>
+      {status.replace(/_/g, " ")}
     </span>
   );
 }
 
-// ─── Tabs ─────────────────────────────────────────────────────────────────────
-
-type Tab = "food" | "waste" | "history";
-
-const FOOD_STEPS  = ["Accepted", "In transit", "Delivered"];
-const FAIL_REASONS = [
-  { value: "FOOD_UNSAFE",         label: "Food not safe" },
-  { value: "RECIPIENT_UNAVAILABLE", label: "Recipient unavailable" },
-  { value: "VEHICLE_BREAKDOWN",   label: "Vehicle breakdown" },
-  { value: "OTHER",               label: "Other" },
-];
-
-// ─── Stepper ──────────────────────────────────────────────────────────────────
-
-function MiniStepper({ steps, current }: { steps: string[]; current: number }) {
+function CopyChip({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    navigator.clipboard.writeText(value).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }).catch(() => undefined);
+  };
   return (
-    <div className="flex items-center gap-0">
-      {steps.map((label, i) => (
-        <div key={label} className="flex items-center flex-1 min-w-0">
-          <div className="flex flex-col items-center shrink-0">
-            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold ${
-              i < current ? "bg-success text-white"
-              : i === current ? "bg-pink text-white"
-              : "bg-border text-muted"
-            }`}>
-              {i < current ? <Check size={11} /> : i + 1}
+    <button
+      onClick={copy}
+      className="inline-flex items-center gap-1 font-mono font-bold text-ink bg-border rounded px-2 py-0.5 text-xs hover:bg-pink-tint transition-colors"
+      title="Copy"
+    >
+      {value}
+      {copied ? <Check size={11} className="text-success" /> : <Copy size={11} />}
+    </button>
+  );
+}
+
+interface MiniStepperProps { steps: string[]; current: number }
+function MiniStepper({ steps, current }: MiniStepperProps) {
+  return (
+    <div className="flex items-center gap-0 mt-2">
+      {steps.map((step, i) => {
+        const done   = i < current;
+        const active = i === current;
+        return (
+          <div key={step} className="flex items-center">
+            <div className="flex flex-col items-center gap-0.5">
+              <div className={[
+                "h-6 w-6 rounded-full flex items-center justify-center text-xs font-bold transition-colors",
+                done   ? "bg-success text-white"
+                : active ? "bg-pink text-white"
+                :          "bg-border text-muted",
+              ].join(" ")}>
+                {done ? <Check size={12} /> : i + 1}
+              </div>
+              <span className={`text-[10px] whitespace-nowrap ${active ? "text-ink font-semibold" : "text-muted"}`}>
+                {step}
+              </span>
             </div>
-            <span className="text-[10px] text-muted mt-0.5 text-center leading-tight">{label}</span>
+            {i < steps.length - 1 && (
+              <div className={`h-0.5 w-8 mx-1 mb-4 rounded ${done ? "bg-success" : "bg-border"}`} />
+            )}
           </div>
-          {i < steps.length - 1 && (
-            <div className={`flex-1 h-0.5 mx-1 mb-3 ${i < current ? "bg-success" : "bg-border"}`} />
-          )}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
 
-// ─── Section wrap ─────────────────────────────────────────────────────────────
+// ─── Inline shared constants ──────────────────────────────────────────────────
+
+const inputCls  = "w-full px-3 py-2 rounded border border-border bg-card text-sm text-ink placeholder:text-muted focus:outline-none focus:border-pink transition-colors";
+const selectCls = inputCls;
 
 function SectionWrap({ id, title, children }: { id: string; title: string; children: ReactNode }) {
   return (
-    <section id={id} className="scroll-mt-6 mb-14">
-      <h2 className="text-lg font-bold text-ink mb-5">{title}</h2>
+    <section id={id} className="scroll-mt-6 mb-10">
+      <h2 className="text-lg font-bold text-ink mb-4">{title}</h2>
       {children}
     </section>
   );
 }
 
-// ─── Food deliveries section ─────────────────────────────────────────────────
-
-function FoodDeliveriesSection({ onRefresh }: { onRefresh: () => void }) {
-  const [jobs,      setJobs]      = useState<Job[]>([]);
-  const [pickups,   setPickups]   = useState<Pickup[]>([]);
-  const [loading,   setLoading]   = useState(true);
-  const [busy,      setBusy]      = useState<number | null>(null);
-  const [slotSel,   setSlotSel]   = useState<Record<number, number>>({});
-  const [failOpen,  setFailOpen]  = useState<number | null>(null);
-  const { toast } = useToast();
-
-  const load = () => {
-    setLoading(true);
-    Promise.all([
-      call<Job[]>("data", "jobs").catch(() => []),
-      call<Pickup[]>("data", "myPickups").catch(() => []),
-    ])
-    .then(([j, p]) => { setJobs(j ?? []); setPickups(p ?? []); })
-    .catch(err => toast(err instanceof Error ? err.message : "Could not load jobs"))
-    .finally(() => setLoading(false));
-  };
-
-  useEffect(() => { load(); }, []);
-
-  const handleAccept = async (job: Job) => {
-    const slotId = slotSel[job.claim_id] ?? job.slots[0]?.slot_id;
-    if (!slotId) { toast("No slot available for this job"); return; }
-    setBusy(job.claim_id);
-    try {
-      await call("data", "accept", { claim_id: job.claim_id, slot_id: slotId });
-      toast("Job accepted!", "success");
-      load();
-      onRefresh();
-    } catch (err) {
-      toast(err instanceof Error ? err.message : "Could not accept job");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const handleStatus = async (pickupId: number, status: string, reason?: string) => {
-    try {
-      await call("data", "setStatus", { pickup_id: pickupId, status, failure_reason: reason });
-      toast("Status updated", "success");
-      load();
-      onRefresh();
-    } catch (err) {
-      toast(err instanceof Error ? err.message : "Could not update status");
-    }
-    setFailOpen(null);
-  };
-
-  // Active pickups (not delivered / not failed)
-  const active = pickups.filter(p =>
-    p.pickup_status !== "DELIVERED" && p.pickup_status !== "FAILED"
-  );
-  const availableJobs = jobs.filter(j =>
-    !pickups.some(p => /* same claim already accepted */ false)
-  );
-
+function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <SectionWrap id="food-deliveries" title="Food deliveries">
-      {/* Active pickups with stepper */}
-      {loading ? (
-        <Skeleton className="h-40 w-full rounded-xl mb-4" />
-      ) : active.length > 0 ? (
-        <div className="flex flex-col gap-4 mb-6">
-          {active.map(p => {
-            const stepIdx = p.pickup_status === "IN_TRANSIT" ? 1 : 0;
-            return (
-              <div key={p.pickup_id} className="rounded-xl border-2 border-pink bg-white p-5 shadow-sm">
-                <div className="flex items-start justify-between gap-3 mb-4">
-                  <div>
-                    <p className="font-bold text-sm text-ink">{p.food_name} × {p.quantity_claimed}</p>
-                    <p className="text-xs text-muted mt-0.5">
-                      <MapPin size={10} className="inline mr-0.5" />
-                      From {p.pickup_from} → To {p.deliver_to}
-                    </p>
-                    <p className="text-xs text-muted mt-0.5">
-                      <Truck size={10} className="inline mr-0.5" />
-                      Slot: {p.slot_date?.toString().slice(0,10)} {p.start_time}
-                    </p>
-                  </div>
-                  <StatusBadge status={p.pickup_status} />
-                </div>
-
-                <MiniStepper steps={FOOD_STEPS} current={stepIdx} />
-
-                {/* Action buttons */}
-                <div className="flex items-center gap-2 mt-4">
-                  {p.pickup_status === "ACCEPTED" && (
-                    <button
-                      onClick={() => handleStatus(p.pickup_id, "IN_TRANSIT")}
-                      className="px-4 py-2 rounded-lg bg-blue text-white text-xs font-bold hover:brightness-110 transition-all"
-                    >
-                      Start delivery
-                    </button>
-                  )}
-                  {p.pickup_status === "IN_TRANSIT" && (
-                    <button
-                      onClick={() => handleStatus(p.pickup_id, "DELIVERED")}
-                      className="px-4 py-2 rounded-lg bg-success text-white text-xs font-bold hover:brightness-110 transition-all"
-                    >
-                      Mark delivered
-                    </button>
-                  )}
-
-                  {/* Report a problem dropdown */}
-                  <div className="relative ml-auto">
-                    <button
-                      onClick={() => setFailOpen(failOpen === p.pickup_id ? null : p.pickup_id)}
-                      className="px-3 py-2 rounded-lg border border-error text-error text-xs font-semibold hover:bg-error-tint transition-colors"
-                    >
-                      Report a problem
-                      <ChevronDown size={11} className="inline ml-1" />
-                    </button>
-                    {failOpen === p.pickup_id && (
-                      <div className="absolute right-0 top-full mt-1 w-56 rounded-lg border border-border bg-white shadow-lg z-20 py-1">
-                        {FAIL_REASONS.map(r => (
-                          <button
-                            key={r.value}
-                            onClick={() => handleStatus(p.pickup_id, "FAILED", r.value)}
-                            className="w-full text-left px-3 py-2 text-xs text-ink hover:bg-error-tint transition-colors"
-                          >
-                            {r.label}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
-
-      {/* Available jobs */}
-      <p className="text-sm font-semibold text-ink mb-3">Available jobs</p>
-      {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-44 rounded-xl" />)}
-        </div>
-      ) : availableJobs.length === 0 ? (
-        <EmptyState message="No delivery jobs available right now." />
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          {availableJobs.map(job => (
-            <div key={job.claim_id} className="rounded-xl border border-border bg-white p-4 shadow-sm hover:shadow-md transition-shadow">
-              <p className="font-bold text-sm text-ink mb-1">{job.food_name} × {job.quantity_claimed}</p>
-              <p className="text-xs text-muted mb-2">
-                <MapPin size={10} className="inline mr-0.5" />
-                From {job.pickup_from} → To {job.deliver_to}
-              </p>
-              <div className="flex items-center gap-2 mb-3 text-xs">
-                <span className="font-medium text-ink">{n(job.distance_km).toFixed(1)} km</span>
-                {!job.within_radius && (
-                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-error-tint text-error">
-                    Outside your radius
-                  </span>
-                )}
-              </div>
-
-              {/* Slot dropdown */}
-              {job.slots.length > 0 ? (
-                <div className="flex items-center gap-2 mb-3">
-                  <select
-                    value={slotSel[job.claim_id] ?? job.slots[0].slot_id}
-                    onChange={e => setSlotSel(s => ({ ...s, [job.claim_id]: Number(e.target.value) }))}
-                    className="flex-1 px-2 py-1.5 rounded border border-border bg-white text-xs text-ink focus:outline-none focus:border-pink"
-                  >
-                    {job.slots.map(s => (
-                      <option key={s.slot_id} value={s.slot_id}>
-                        {s.slot_date.toString().slice(0,10)} {s.start_time}–{s.end_time}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    onClick={() => handleAccept(job)}
-                    disabled={busy === job.claim_id}
-                    className="px-4 py-1.5 rounded-lg bg-pink text-white text-xs font-bold shadow-glow-pink hover:brightness-110 disabled:opacity-50 transition-all"
-                  >
-                    {busy === job.claim_id ? <Loader2 size={12} className="inline animate-spin" /> : "Accept"}
-                  </button>
-                </div>
-              ) : (
-                <p className="text-xs text-muted">No free slots for this job.</p>
-              )}
-            </div>
-          ))}
-        </div>
-      )}
-    </SectionWrap>
+    <label className="flex flex-col gap-1.5 text-sm font-semibold text-ink">
+      {label}
+      {children}
+    </label>
   );
 }
 
-// ─── Waste runs section ────────────────────────────────────────────────────────
+// ─── Formatters ───────────────────────────────────────────────────────────────
 
-const ROUTE_BADGE: Record<string, string> = {
-  ANIMAL_SHELTER: "bg-pink-tint text-pink",
-  FARM:          "bg-success-tint text-success",
-  BIOGAS:        "bg-blue-tint text-blue",
-  COMPOST:       "bg-border text-muted",
-};
+function fmtDate(d: string | null): string {
+  if (!d) return "—";
+  return new Date(d).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" });
+}
 
-function WasteRunsSection({ onRefresh }: { onRefresh: () => void }) {
-  const [jobs,       setJobs]       = useState<WasteJob[]>([]);
-  const [slots,      setSlots]     = useState<WasteSlot[]>([]);
-  const [containers, setContainers] = useState<Container[]>([]);
-  const [loading,    setLoading]    = useState(true);
-  const [checked,    setChecked]    = useState<Set<number>>(new Set());
-  const [form,       setForm]       = useState({ slot_id: 0, container_id: 0, vehicle_no: "", weighed_kg: "" });
-  const [busy,       setBusy]       = useState(false);
-  const [receipt,    setReceipt]    = useState<CollectResponse | null>(null);
-  const { toast } = useToast();
+function fmtSlot(slot_date: string | null, start_time: string | null, end_time: string | null): string {
+  if (!slot_date) return "—";
+  const d = new Date(slot_date).toLocaleDateString(undefined, { dateStyle: "medium" });
+  if (!start_time) return d;
+  const s = start_time.slice(0, 5);
+  const e = end_time ? end_time.slice(0, 5) : "";
+  return `${d}  ${s}${e ? "–" + e : ""}`;
+}
 
-  const load = () => {
-    setLoading(true);
-    Promise.all([
-      call<WasteJob[]>("data", "wasteJobs").catch(() => []),
-      call<WasteSlot[]>("data", "wasteSlots").catch(() => []),
-      call<Container[]>("data", "containers").catch(() => []),
-    ])
-    .then(([j, s, c]) => { setJobs(j ?? []); setSlots(s ?? []); setContainers(c ?? []); })
-    .catch(err => toast(err instanceof Error ? err.message : "Could not load waste jobs"))
-    .finally(() => setLoading(false));
-  };
+// ─── Stat card ────────────────────────────────────────────────────────────────
 
-  useEffect(() => { load(); }, []);
+interface StatCardProps { label: string; value: string; icon: ReactNode; color: string }
+function StatCard({ label, value, icon, color }: StatCardProps) {
+  return (
+    <div className="rounded-lg border border-border bg-card p-5 shadow-sm">
+      <div className={`mb-2 ${color}`}>{icon}</div>
+      <p className="text-2xl font-bold text-ink">{value}</p>
+      <p className="text-xs text-muted mt-0.5">{label}</p>
+    </div>
+  );
+}
 
-  // Group jobs by partner
-  const byPartner = new Map<number, { name: string; address: string; route_type: string; items: WasteJob[] }>();
-  jobs.forEach(j => {
-    let p = byPartner.get(j.partner_id);
-    if (!p) { p = { name: j.partner_name, address: j.partner_address, route_type: j.route_type, items: [] }; byPartner.set(j.partner_id, p); }
-    p.items.push(j);
-  });
+// ─── Confirmation card ────────────────────────────────────────────────────────
 
-  // Which partner are we collecting for?
-  const checkedJobs = jobs.filter(j => checked.has(j.waste_id));
-  const checkedPartners = new Set(checkedJobs.map(j => j.partner_id));
-  const activePartnerId = checkedPartners.size === 1 ? [...checkedPartners][0] : null;
+interface ConfirmRow { label: string; value: string | ReactNode }
+interface ConfirmationCardProps {
+  title:    string;
+  rows:     ConfirmRow[];
+  button:   string;
+  onButton: () => void;
+}
+function ConfirmationCard({ title, rows, button, onButton }: ConfirmationCardProps) {
+  return (
+    <div className="rounded-xl border border-success bg-success-tint p-6 flex flex-col gap-4 shadow-sm">
+      <div className="flex flex-col items-center gap-2">
+        <div className="h-12 w-12 rounded-full bg-success flex items-center justify-center">
+          <CheckCircle2 size={24} className="text-white" />
+        </div>
+        <h3 className="font-bold text-ink text-base">{title}</h3>
+      </div>
+      <div className="flex flex-col gap-2">
+        {rows.map((r, i) => (
+          <div key={i} className="flex items-start justify-between gap-4 text-sm">
+            <span className="text-muted shrink-0">{r.label}</span>
+            <span className="font-semibold text-ink text-right">{r.value}</span>
+          </div>
+        ))}
+      </div>
+      <button
+        onClick={onButton}
+        className="w-full py-2.5 rounded-lg bg-pink text-white text-sm font-bold shadow-glow-pink hover:brightness-110 transition-all"
+      >
+        {button}
+      </button>
+    </div>
+  );
+}
 
-  const toggle = (id: number) => {
-    setChecked(prev => {
-      const s = new Set(prev);
-      if (s.has(id)) s.delete(id); else s.add(id);
-      return s;
-    });
-  };
+// ─── Report problem dropdown ──────────────────────────────────────────────────
 
-  const handleCollect = async () => {
-    if (!activePartnerId) { toast("Select routings for one partner only"); return; }
-    if (!form.slot_id || !form.container_id || !form.vehicle_no || !form.weighed_kg) {
-      toast("Fill in slot, container, vehicle and weight");
-      return;
-    }
+const FAILURE_REASONS: { value: string; label: string }[] = [
+  { value: "FOOD_UNSAFE",            label: "Food not safe"        },
+  { value: "RECIPIENT_UNAVAILABLE",  label: "Recipient unavailable" },
+  { value: "VEHICLE_BREAKDOWN",      label: "Vehicle breakdown"     },
+  { value: "OTHER",                  label: "Other"                 },
+];
+
+interface ReportMenuProps {
+  pickupId: number;
+  onDone:   () => void;
+}
+function ReportMenu({ pickupId, onDone }: ReportMenuProps) {
+  const [open, setOpen]   = useState(false);
+  const [busy, setBusy]   = useState(false);
+  const { toast }         = useToast();
+  const ref               = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, [open]);
+
+  const report = async (reason: string) => {
     setBusy(true);
+    setOpen(false);
     try {
-      const res = await call<CollectResponse>("data", "collect", {
-        waste_ids: [...checked],
-        slot_id: form.slot_id,
-        container_id: form.container_id,
-        vehicle_no: form.vehicle_no,
-        weighed_kg: Number(form.weighed_kg),
-      });
-      setReceipt(res);
-      setChecked(new Set());
-      setForm({ slot_id: 0, container_id: 0, vehicle_no: "", weighed_kg: "" });
-      load();
-      onRefresh();
+      await call("data", "setStatus", { pickup_id: pickupId, status: "FAILED", failure_reason: reason });
+      toast("Problem reported.", "info");
+      onDone();
     } catch (err) {
-      toast(err instanceof Error ? err.message : "Could not collect waste");
+      toast(err instanceof Error ? err.message : "Could not report problem");
     } finally {
       setBusy(false);
     }
   };
 
-  if (loading) return <Skeleton className="h-60 w-full rounded-xl" />;
-
-  if (receipt) {
-    return (
-      <SectionWrap id="waste-runs" title="Waste runs">
-        <div className="max-w-md rounded-xl border-2 border-success bg-success-tint p-6">
-          <div className="flex items-center gap-2 mb-3">
-            <Check size={20} className="text-success" />
-            <p className="font-bold text-success">Collection recorded!</p>
-          </div>
-          <p className="text-sm text-ink mb-1">Receipt: <strong className="font-mono">{receipt.receipt_ref}</strong></p>
-          <p className="text-sm text-muted">Collection ID: {receipt.collection_id}</p>
-          <button
-            onClick={() => setReceipt(null)}
-            className="mt-4 w-full py-2.5 rounded-lg bg-pink text-white text-sm font-bold"
-          >
-            Done
-          </button>
-        </div>
-      </SectionWrap>
-    );
-  }
-
-  if (jobs.length === 0) return (
-    <SectionWrap id="waste-runs" title="Waste runs">
-      <EmptyState message="No waste routings pending right now." />
-    </SectionWrap>
-  );
-
   return (
-    <SectionWrap id="waste-runs" title="Waste runs">
-      <div className="flex flex-col gap-5">
-        {Array.from(byPartner.entries()).map(([pid, p]) => (
-          <div key={pid} className="rounded-xl border border-border bg-white p-4 shadow-sm">
-            {/* Partner header */}
-            <div className="flex items-center gap-2 mb-3">
-              <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${ROUTE_BADGE[p.route_type] ?? "bg-border text-muted"}`}>
-                {p.route_type.replace(/_/g, " ")}
-              </span>
-              <div className="min-w-0">
-                <p className="font-bold text-sm text-ink truncate">{p.name}</p>
-                <p className="text-xs text-muted truncate">{p.address}</p>
-              </div>
-            </div>
-
-            {/* Routing checkboxes */}
-            <ul className="flex flex-col gap-1.5 mb-3">
-              {p.items.map(j => (
-                <li key={j.waste_id}>
-                  <label className="flex items-center gap-2 cursor-pointer text-sm text-ink py-1">
-                    <input
-                      type="checkbox"
-                      checked={checked.has(j.waste_id)}
-                      onChange={() => toggle(j.waste_id)}
-                      className="w-4 h-4 accent-[var(--color-pink)]"
-                    />
-                    <span className="flex-1">{j.food_name}</span>
-                    <span className="text-xs text-muted">{n(j.quantity_kg).toFixed(1)} kg · {j.condition_grade.replace(/_/g," ")}</span>
-                  </label>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
-      </div>
-
-      {/* Collection form — only when one partner's items are checked */}
-      {activePartnerId && (
-        <div className="mt-4 rounded-xl border-2 border-pink bg-pink-tint/30 p-5">
-          <p className="font-semibold text-sm text-ink mb-4">Collect {checked.size} routing(s) from {byPartner.get(activePartnerId)?.name}</p>
-          <div className="grid grid-cols-2 gap-3">
-            <label className="flex flex-col gap-1 text-xs font-semibold text-ink">
-              Slot
-              <select value={form.slot_id} onChange={e => setForm(f => ({ ...f, slot_id: Number(e.target.value) }))} className="px-2 py-2 rounded border border-border bg-white text-sm focus:outline-none focus:border-pink">
-                <option value={0}>Choose…</option>
-                {slots.map(s => <option key={s.slot_id} value={s.slot_id}>{s.slot_date.toString().slice(0,10)} {s.start_time}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-semibold text-ink">
-              Container
-              <select value={form.container_id} onChange={e => setForm(f => ({ ...f, container_id: Number(e.target.value) }))} className="px-2 py-2 rounded border border-border bg-white text-sm focus:outline-none focus:border-pink">
-                <option value={0}>Choose…</option>
-                {containers.map(c => <option key={c.container_id} value={c.container_id}>{c.label}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-semibold text-ink">
-              Vehicle number
-              <input value={form.vehicle_no} onChange={e => setForm(f => ({ ...f, vehicle_no: e.target.value }))} placeholder="DL01AB1234" className="px-2 py-2 rounded border border-border bg-white text-sm focus:outline-none focus:border-pink" />
-            </label>
-            <label className="flex flex-col gap-1 text-xs font-semibold text-ink">
-              Weighed (kg)
-              <input type="number" step="0.1" min="0" value={form.weighed_kg} onChange={e => setForm(f => ({ ...f, weighed_kg: e.target.value }))} placeholder="42.5" className="px-2 py-2 rounded border border-border bg-white text-sm focus:outline-none focus:border-pink" />
-            </label>
-          </div>
-          <button
-            onClick={handleCollect}
-            disabled={busy}
-            className="mt-4 w-full py-2.5 rounded-lg bg-pink text-white text-sm font-bold shadow-glow-pink hover:brightness-110 disabled:opacity-50 transition-all"
-          >
-            {busy ? <Loader2 size={14} className="inline animate-spin mr-1" /> : null}
-            {busy ? "Recording…" : "Collect"}
-          </button>
-        </div>
-      )}
-    </SectionWrap>
-  );
-}
-
-// ─── History section ──────────────────────────────────────────────────────────
-
-function HistorySection() {
-  const [pickups,     setPickups]     = useState<Pickup[]>([]);
-  const [collections, setCollections] = useState<Collection[]>([]);
-  const [impact,      setImpact]     = useState<VolunteerImpact | null>(null);
-  const [loading,     setLoading]    = useState(true);
-  const { toast } = useToast();
-
-  useEffect(() => {
-    Promise.all([
-      call<Pickup[]>("data", "myPickups").catch(() => []),
-      call<Collection[]>("data", "myCollections").catch(() => []),
-      call<VolunteerImpact>("data", "myImpact").catch(() => null),
-    ])
-    .then(([p, c, imp]) => { setPickups(p ?? []); setCollections(c ?? []); setImpact(imp); })
-    .catch(err => toast(err instanceof Error ? err.message : "Could not load history"))
-    .finally(() => setLoading(false));
-  }, []);
-
-  const stats = impact ? [
-    { label: "Deliveries",     value: impact.deliveries_completed },
-    { label: "Kg delivered",   value: n(impact.kg_delivered).toFixed(1) },
-    { label: "Meals delivered", value: n(impact.meals_delivered).toFixed(0) },
-    { label: "Waste collected", value: `${n(impact.waste_kg_collected).toFixed(1)} kg` },
-  ] : [];
-
-  return (
-    <SectionWrap id="my-history" title="My history">
-      {/* Stat cards */}
-      {impact && (
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
-          {stats.map(s => (
-            <div key={s.label} className="rounded-lg border border-border bg-white p-4 shadow-sm text-center">
-              <p className="text-lg font-bold text-ink">{s.value}</p>
-              <p className="text-xs text-muted mt-0.5">{s.label}</p>
-            </div>
+    <div className="relative" ref={ref}>
+      <button
+        onClick={() => setOpen(o => !o)}
+        disabled={busy}
+        className="flex items-center gap-1 px-3 py-1.5 rounded border border-error text-error text-xs font-semibold hover:bg-error-tint transition-colors"
+      >
+        {busy ? <Loader2 size={12} className="animate-spin" /> : null}
+        Report a problem
+        <ChevronDown size={12} />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-8 z-20 bg-card border border-border rounded-lg shadow-md min-w-[180px] py-1">
+          {FAILURE_REASONS.map(fr => (
+            <button
+              key={fr.value}
+              onClick={() => report(fr.value)}
+              className="w-full text-left px-4 py-2 text-sm text-ink hover:bg-border transition-colors"
+            >
+              {fr.label}
+            </button>
           ))}
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Active pickup card ───────────────────────────────────────────────────────
+
+const PICKUP_STEPS = ["Accepted", "In transit", "Delivered"];
+const statusToStep: Record<string, number> = {
+  ACCEPTED:   0,
+  SCHEDULED:  0,
+  IN_TRANSIT: 1,
+  DELIVERED:  2,
+};
+
+interface ActivePickupCardProps {
+  pickup:   Pickup;
+  onReload: () => void;
+}
+function ActivePickupCard({ pickup, onReload }: ActivePickupCardProps) {
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+
+  const stepIndex = statusToStep[pickup.pickup_status] ?? 0;
+
+  const advance = async (status: string) => {
+    setBusy(true);
+    try {
+      await call("data", "setStatus", { pickup_id: pickup.pickup_id, status });
+      toast(status === "IN_TRANSIT" ? "Delivery started!" : "Delivery marked complete!", "success");
+      onReload();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not update status");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-4 shadow-sm flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-2 flex-wrap">
+        <div>
+          <p className="font-bold text-ink text-sm">
+            {pickup.food_name} × {pickup.quantity_claimed}
+          </p>
+          <p className="text-xs text-muted mt-0.5">
+            {fmtSlot(pickup.slot_date, pickup.start_time, pickup.end_time)}
+          </p>
+        </div>
+        <StatusBadge status={pickup.pickup_status} />
+      </div>
+
+      <div className="text-xs text-muted flex flex-col gap-0.5">
+        <span className="flex items-center gap-1">
+          <MapPin size={11} />
+          From: <span className="text-ink">{pickup.pickup_from}</span>
+        </span>
+        <span className="flex items-center gap-1">
+          <MapPin size={11} />
+          To: <span className="text-ink">{pickup.deliver_to}</span>
+        </span>
+      </div>
+
+      <MiniStepper steps={PICKUP_STEPS} current={stepIndex} />
+
+      <div className="flex items-center gap-2 flex-wrap mt-1">
+        {pickup.pickup_status === "ACCEPTED" || pickup.pickup_status === "SCHEDULED" ? (
+          <button
+            onClick={() => advance("IN_TRANSIT")}
+            disabled={busy}
+            className="flex items-center gap-1 px-4 py-1.5 rounded-lg bg-pink text-white text-xs font-bold shadow-glow-pink hover:brightness-110 disabled:opacity-50 transition-all"
+          >
+            {busy ? <Loader2 size={12} className="animate-spin" /> : <Truck size={12} />}
+            Start delivery
+          </button>
+        ) : pickup.pickup_status === "IN_TRANSIT" ? (
+          <button
+            onClick={() => advance("DELIVERED")}
+            disabled={busy}
+            className="flex items-center gap-1 px-4 py-1.5 rounded-lg bg-success text-white text-xs font-bold hover:brightness-110 disabled:opacity-50 transition-all"
+          >
+            {busy ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+            Mark delivered
+          </button>
+        ) : null}
+
+        <ReportMenu pickupId={pickup.pickup_id} onDone={onReload} />
+      </div>
+    </div>
+  );
+}
+
+// ─── Job card ─────────────────────────────────────────────────────────────────
+
+interface JobCardProps {
+  job:      Job;
+  onReload: () => void;
+  onAccept: (job: Job, slotId: number) => void;
+  accepting: boolean;
+}
+function JobCard({ job, onReload: _onReload, onAccept, accepting }: JobCardProps) {
+  const [selectedSlot, setSelectedSlot] = useState<number>(
+    job.slots.length > 0 ? job.slots[0].slot_id : -1,
+  );
+
+  const noSlots  = job.slots.length === 0;
+  const distNum  = n(job.distance_km);
+  const distText = distNum > 0 ? `${distNum.toFixed(1)} km` : "—";
+
+  return (
+    <div className={`rounded-lg border bg-card p-4 shadow-sm flex gap-3 ${noSlots ? "opacity-60" : ""}`}>
+      {/* icon tile */}
+      <div className="h-10 w-10 shrink-0 rounded-lg bg-pink-tint flex items-center justify-center">
+        <Bike size={18} className="text-pink" />
+      </div>
+
+      <div className="flex-1 min-w-0 flex flex-col gap-2">
+        <div className="flex items-start justify-between gap-2 flex-wrap">
+          <div>
+            <p className="font-bold text-ink text-sm">
+              {job.food_name} × {job.quantity_claimed}
+            </p>
+            <p className="text-xs text-muted mt-0.5">
+              From {job.pickup_from} → To {job.deliver_to}
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <span className="text-xs font-semibold text-muted border border-border rounded-full px-2 py-0.5">
+              {distText}
+            </span>
+            {!job.within_radius && (
+              <span className="text-xs font-semibold bg-error-tint text-error rounded-full px-2 py-0.5">
+                outside your radius
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 flex-wrap">
+          {noSlots ? (
+            <span className="text-xs text-muted">No free slots</span>
+          ) : (
+            <select
+              className={`${selectCls} w-auto text-xs py-1`}
+              value={selectedSlot}
+              onChange={e => setSelectedSlot(Number(e.target.value))}
+            >
+              {job.slots.map(s => (
+                <option key={s.slot_id} value={s.slot_id}>
+                  {fmtSlot(s.slot_date, s.start_time, s.end_time)}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {!noSlots && (
+            <button
+              onClick={() => onAccept(job, selectedSlot)}
+              disabled={accepting}
+              className="flex items-center gap-1 px-4 py-1.5 rounded-lg bg-pink text-white text-xs font-bold shadow-glow-pink hover:brightness-110 disabled:opacity-50 transition-all"
+            >
+              {accepting ? <Loader2 size={12} className="animate-spin" /> : null}
+              Accept
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab: Food deliveries ─────────────────────────────────────────────────────
+
+const ACTIVE_STATUSES = new Set(["ACCEPTED", "SCHEDULED", "IN_TRANSIT"]);
+
+interface AcceptedJob { job: Job; slotId: number; pickupId: number }
+
+function FoodDeliveriesTab() {
+  const { toast }    = useToast();
+  const activeRef    = useRef<HTMLDivElement>(null);
+
+  const [jobs,        setJobs]        = useState<Job[] | null>(null);
+  const [pickups,     setPickups]     = useState<Pickup[] | null>(null);
+  const [loadingJobs, setLoadingJobs] = useState(true);
+  const [loadingPU,   setLoadingPU]   = useState(true);
+  const [acceptingId, setAcceptingId] = useState<number | null>(null);
+
+  // After accept: confirmed card state
+  const [accepted, setAccepted] = useState<AcceptedJob | null>(null);
+
+  const loadJobs = useCallback(() => {
+    setLoadingJobs(true);
+    call<Job[]>("data", "jobs")
+      .then(setJobs)
+      .catch(err => toast(err instanceof Error ? err.message : "Could not load jobs"))
+      .finally(() => setLoadingJobs(false));
+  }, [toast]);
+
+  const loadPickups = useCallback(() => {
+    setLoadingPU(true);
+    call<Pickup[]>("data", "myPickups")
+      .then(setPickups)
+      .catch(err => toast(err instanceof Error ? err.message : "Could not load pickups"))
+      .finally(() => setLoadingPU(false));
+  }, [toast]);
+
+  useEffect(() => {
+    loadJobs();
+    loadPickups();
+  }, [loadJobs, loadPickups]);
+
+  const reload = useCallback(() => {
+    loadJobs();
+    loadPickups();
+  }, [loadJobs, loadPickups]);
+
+  const handleAccept = async (job: Job, slotId: number) => {
+    setAcceptingId(job.claim_id);
+    try {
+      const res = await call<{ ok: number; pickup_id: number }>("data", "accept", {
+        claim_id: job.claim_id,
+        slot_id:  slotId,
+      });
+      toast("Job accepted!", "success");
+      setAccepted({ job, slotId, pickupId: res.pickup_id });
+      reload();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not accept job");
+    } finally {
+      setAcceptingId(null);
+    }
+  };
+
+  const activePickups = pickups?.filter(p => ACTIVE_STATUSES.has(p.pickup_status)) ?? [];
+
+  // Find slot info for accepted card
+  const acceptedSlot = accepted
+    ? accepted.job.slots.find(s => s.slot_id === accepted.slotId) ?? null
+    : null;
+
+  if (accepted) {
+    return (
+      <div className="flex flex-col gap-6">
+        <ConfirmationCard
+          title="Job accepted!"
+          rows={[
+            { label: "Food",        value: `${accepted.job.food_name} × ${accepted.job.quantity_claimed}` },
+            { label: "Pickup from", value: accepted.job.pickup_from },
+            { label: "Deliver to",  value: accepted.job.deliver_to  },
+            { label: "Slot",        value: acceptedSlot
+                ? fmtSlot(acceptedSlot.slot_date, acceptedSlot.start_time, acceptedSlot.end_time)
+                : "—" },
+          ]}
+          button="View my pickups"
+          onButton={() => {
+            setAccepted(null);
+            setTimeout(() => activeRef.current?.scrollIntoView({ behavior: "smooth" }), 100);
+          }}
+        />
+        <button
+          onClick={() => setAccepted(null)}
+          className="text-sm text-muted hover:text-ink transition-colors text-center"
+        >
+          Back to job list
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-8">
+      {/* Active pickups */}
+      <div ref={activeRef}>
+        <h3 className="text-sm font-bold text-ink mb-3">Active pickups</h3>
+        {loadingPU ? (
+          <div className="flex flex-col gap-2">
+            {[1, 2].map(i => <Skeleton key={i} className="h-28 w-full" />)}
+          </div>
+        ) : activePickups.length === 0 ? (
+          <EmptyState message="No active pickups right now." />
+        ) : (
+          <div className="flex flex-col gap-3">
+            {activePickups.map(p => (
+              <ActivePickupCard key={p.pickup_id} pickup={p} onReload={reload} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Available jobs */}
+      <div>
+        <h3 className="text-sm font-bold text-ink mb-3">Available jobs</h3>
+        {loadingJobs ? (
+          <div className="flex flex-col gap-2">
+            {[1, 2, 3].map(i => <Skeleton key={i} className="h-24 w-full" />)}
+          </div>
+        ) : !jobs || jobs.length === 0 ? (
+          <EmptyState message="No available jobs right now. Check back soon." />
+        ) : (
+          <div className="flex flex-col gap-3">
+            {jobs.map(job => (
+              <JobCard
+                key={job.claim_id}
+                job={job}
+                onReload={reload}
+                onAccept={handleAccept}
+                accepting={acceptingId === job.claim_id}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Tab: Waste runs ──────────────────────────────────────────────────────────
+
+const ROUTE_TYPE_STYLE: Record<string, string> = {
+  ANIMAL_SHELTER: "bg-pink-tint text-pink",
+  FARM:           "bg-success-tint text-success",
+  BIOGAS:         "bg-blue-tint text-blue",
+  COMPOST:        "bg-border text-muted",
+};
+
+interface WasteGroup {
+  partner_id:      number;
+  partner_name:    string;
+  partner_address: string;
+  route_type:      string;
+  jobs:            WasteJob[];
+}
+
+function groupByPartner(jobs: WasteJob[]): WasteGroup[] {
+  const map = new Map<number, WasteGroup>();
+  for (const job of jobs) {
+    if (!map.has(job.partner_id)) {
+      map.set(job.partner_id, {
+        partner_id:      job.partner_id,
+        partner_name:    job.partner_name,
+        partner_address: job.partner_address,
+        route_type:      job.route_type,
+        jobs:            [],
+      });
+    }
+    map.get(job.partner_id)!.jobs.push(job);
+  }
+  return [...map.values()];
+}
+
+interface ReceiptState {
+  collectionId: number;
+  receiptRef:   string;
+  partnerName:  string;
+  weighedKg:    number;
+}
+
+function WasteRunsTab() {
+  const { toast } = useToast();
+
+  const [wasteJobs,   setWasteJobs]   = useState<WasteJob[] | null>(null);
+  const [wasteSlots,  setWasteSlots]  = useState<WasteSlot[] | null>(null);
+  const [containers,  setContainers]  = useState<Container[] | null>(null);
+  const [loading,     setLoading]     = useState(true);
+
+  // Selection: map of waste_id → true, constrained to one partner
+  const [selected,     setSelected]     = useState<Set<number>>(new Set());
+  const [activePartner, setActivePartner] = useState<number | null>(null);
+
+  // Form fields
+  const [slotId,     setSlotId]     = useState<number>(-1);
+  const [containerId, setContainerId] = useState<number>(-1);
+  const [vehicleNo,  setVehicleNo]  = useState("");
+  const [weighedKg,  setWeighedKg]  = useState("");
+  const [formErr,    setFormErr]    = useState("");
+  const [collecting, setCollecting] = useState(false);
+
+  // Receipt
+  const [receipt, setReceipt] = useState<ReceiptState | null>(null);
+
+  const loadAll = useCallback(() => {
+    setLoading(true);
+    Promise.all([
+      call<WasteJob[]>("data", "wasteJobs"),
+      call<WasteSlot[]>("data", "wasteSlots"),
+      call<Container[]>("data", "containers"),
+    ])
+      .then(([wj, ws, ct]) => {
+        setWasteJobs(wj);
+        setWasteSlots(ws);
+        setContainers(ct);
+        if (ws.length > 0) setSlotId(ws[0].slot_id);
+        if (ct.length > 0) setContainerId(ct[0].container_id);
+      })
+      .catch(err => toast(err instanceof Error ? err.message : "Could not load waste data"))
+      .finally(() => setLoading(false));
+  }, [toast]);
+
+  useEffect(() => { loadAll(); }, [loadAll]);
+
+  const toggleItem = (job: WasteJob) => {
+    const { waste_id, partner_id } = job;
+    if (activePartner !== null && activePartner !== partner_id) {
+      // Switch partner — clear old selection
+      const newSet = new Set<number>();
+      newSet.add(waste_id);
+      setSelected(newSet);
+      setActivePartner(partner_id);
+      return;
+    }
+    setSelected(prev => {
+      const s = new Set(prev);
+      if (s.has(waste_id)) {
+        s.delete(waste_id);
+        if (s.size === 0) setActivePartner(null);
+      } else {
+        s.add(waste_id);
+        setActivePartner(partner_id);
+      }
+      return s;
+    });
+  };
+
+  const handleCollect = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormErr("");
+    if (selected.size === 0) { setFormErr("Select at least one item."); return; }
+    if (slotId < 0) { setFormErr("Select a slot."); return; }
+    if (containerId < 0) { setFormErr("Select a container."); return; }
+    if (!vehicleNo.trim()) { setFormErr("Enter vehicle number."); return; }
+    const kg = parseFloat(weighedKg);
+    if (!weighedKg || isNaN(kg) || kg <= 0) { setFormErr("Enter a valid weight."); return; }
+
+    const partnerName = wasteJobs?.find(j => selected.has(j.waste_id))?.partner_name ?? "";
+
+    setCollecting(true);
+    try {
+      const res = await call<CollectResponse>("data", "collect", {
+        waste_ids:    [...selected],
+        slot_id:      slotId,
+        container_id: containerId,
+        vehicle_no:   vehicleNo.trim(),
+        weighed_kg:   kg,
+      });
+      toast("Collection recorded!", "success");
+      setReceipt({
+        collectionId: res.collection_id,
+        receiptRef:   res.receipt_ref,
+        partnerName,
+        weighedKg:    kg,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Could not record collection";
+      toast(msg);
+      setFormErr(msg);
+    } finally {
+      setCollecting(false);
+    }
+  };
+
+  if (receipt) {
+    return (
+      <ConfirmationCard
+        title="Collection recorded"
+        rows={[
+          { label: "Receipt ref",    value: <CopyChip value={receipt.receiptRef} /> },
+          { label: "Collection ID",  value: String(receipt.collectionId)           },
+          { label: "Partner",        value: receipt.partnerName                     },
+          { label: "Weight collected", value: `${receipt.weighedKg.toFixed(2)} kg` },
+        ]}
+        button="Done"
+        onButton={() => {
+          setReceipt(null);
+          setSelected(new Set());
+          setActivePartner(null);
+          setVehicleNo("");
+          setWeighedKg("");
+          setFormErr("");
+          loadAll();
+        }}
+      />
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="flex flex-col gap-3">
+        {[1, 2, 3].map(i => <Skeleton key={i} className="h-24 w-full" />)}
+      </div>
+    );
+  }
+
+  const groups = groupByPartner(wasteJobs ?? []);
+  const selectedGroup = groups.find(g => g.partner_id === activePartner) ?? null;
+
+  return (
+    <div className="flex flex-col gap-8">
+      {/* Partner groups */}
+      {groups.length === 0 ? (
+        <EmptyState message="No waste jobs available right now." />
+      ) : (
+        <div className="flex flex-col gap-6">
+          {groups.map(g => {
+            const rtStyle = ROUTE_TYPE_STYLE[g.route_type] ?? "bg-border text-muted";
+            return (
+              <div key={g.partner_id} className="rounded-lg border border-border bg-card p-4 shadow-sm">
+                <div className="flex items-center gap-2 mb-3 flex-wrap">
+                  <p className="font-bold text-ink text-sm">{g.partner_name}</p>
+                  <span className={`text-xs font-semibold rounded-full px-2 py-0.5 ${rtStyle}`}>
+                    {g.route_type.replace(/_/g, " ")}
+                  </span>
+                  <span className="text-xs text-muted">{g.partner_address}</span>
+                </div>
+                <div className="flex flex-col gap-2">
+                  {g.jobs.map(job => (
+                    <label
+                      key={job.waste_id}
+                      className="flex items-center gap-3 cursor-pointer rounded p-2 hover:bg-border transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selected.has(job.waste_id)}
+                        onChange={() => toggleItem(job)}
+                        className="w-4 h-4 accent-[var(--color-pink)]"
+                      />
+                      <span className="flex-1 min-w-0">
+                        <span className="block text-sm font-semibold text-ink">{job.food_name}</span>
+                        <span className="block text-xs text-muted">
+                          {n(job.quantity_kg).toFixed(2)} kg · Grade: {job.condition_grade}
+                        </span>
+                      </span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Collection form — shown when items are selected */}
+      {selected.size > 0 && selectedGroup && (
+        <div className="rounded-xl border border-pink bg-pink-tint/30 p-5">
+          <p className="text-sm font-bold text-ink mb-4">
+            Collecting {selected.size} routing{selected.size !== 1 ? "s" : ""} from {selectedGroup.partner_name}
+          </p>
+          <form onSubmit={handleCollect} className="flex flex-col gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <Field label="Slot">
+                <select
+                  className={selectCls}
+                  value={slotId}
+                  onChange={e => setSlotId(Number(e.target.value))}
+                >
+                  {(wasteSlots ?? []).length === 0 && (
+                    <option value={-1}>No slots available</option>
+                  )}
+                  {(wasteSlots ?? []).map(s => (
+                    <option key={s.slot_id} value={s.slot_id}>
+                      {fmtSlot(s.slot_date, s.start_time, s.end_time)}
+                      {" "}({s.capacity - s.booked} free)
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Container">
+                <select
+                  className={selectCls}
+                  value={containerId}
+                  onChange={e => setContainerId(Number(e.target.value))}
+                >
+                  {(containers ?? []).length === 0 && (
+                    <option value={-1}>No containers</option>
+                  )}
+                  {(containers ?? []).map(c => (
+                    <option key={c.container_id} value={c.container_id}>
+                      {c.label} ({c.container_type})
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Vehicle number">
+                <input
+                  type="text"
+                  className={inputCls}
+                  placeholder="DL01AB1234"
+                  value={vehicleNo}
+                  onChange={e => setVehicleNo(e.target.value)}
+                />
+              </Field>
+
+              <Field label="Weighed kg">
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0.01"
+                  className={inputCls}
+                  placeholder="42.5"
+                  value={weighedKg}
+                  onChange={e => setWeighedKg(e.target.value)}
+                />
+              </Field>
+            </div>
+
+            {formErr && (
+              <p className="text-xs text-error">{formErr}</p>
+            )}
+
+            <button
+              type="submit"
+              disabled={collecting}
+              className="w-full py-2.5 rounded-lg bg-pink text-white text-sm font-bold shadow-glow-pink hover:brightness-110 disabled:opacity-50 transition-all"
+            >
+              {collecting
+                ? <><Loader2 size={14} className="inline animate-spin mr-1" />Collecting…</>
+                : "Collect"}
+            </button>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Tab: History ─────────────────────────────────────────────────────────────
+
+function HistoryTab() {
+  const { toast } = useToast();
+
+  const [pickups,     setPickups]     = useState<Pickup[] | null>(null);
+  const [collections, setCollections] = useState<Collection[] | null>(null);
+  const [impact,      setImpact]      = useState<VolunteerImpact | null>(null);
+  const [loading,     setLoading]     = useState(true);
+
+  useEffect(() => {
+    setLoading(true);
+    Promise.all([
+      call<Pickup[]>("data", "myPickups"),
+      call<Collection[]>("data", "myCollections"),
+      call<VolunteerImpact>("data", "myImpact"),
+    ])
+      .then(([pu, col, imp]) => {
+        setPickups(pu);
+        setCollections(col);
+        setImpact(imp);
+      })
+      .catch(err => toast(err instanceof Error ? err.message : "Could not load history"))
+      .finally(() => setLoading(false));
+  }, [toast]);
+
+  const stats = impact
+    ? [
+        { label: "Deliveries",      value: String(impact.deliveries_completed), icon: <Truck size={18} />,    color: "text-pink"    },
+        { label: "Kg delivered",    value: n(impact.kg_delivered).toFixed(1),   icon: <Weight size={18} />,   color: "text-blue"    },
+        { label: "Meals delivered", value: n(impact.meals_delivered).toFixed(0), icon: <Package size={18} />, color: "text-success" },
+        { label: "Waste collected", value: `${n(impact.waste_kg_collected).toFixed(1)} kg`, icon: <Trash2 size={18} />, color: "text-muted" },
+      ]
+    : [];
+
+  return (
+    <div className="flex flex-col gap-8">
+      {/* Stat cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        {loading
+          ? [1, 2, 3, 4].map(i => <Skeleton key={i} className="h-24 rounded-lg" />)
+          : stats.map(s => (
+              <StatCard key={s.label} label={s.label} value={s.value} icon={s.icon} color={s.color} />
+            ))
+        }
+      </div>
 
       {/* Pickups table */}
-      <p className="text-sm font-semibold text-ink mb-2">Food deliveries</p>
-      {loading ? (
-        <Skeleton className="h-40 w-full rounded-xl mb-6" />
-      ) : pickups.length === 0 ? (
-        <EmptyState message="No deliveries yet." />
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-border mb-6">
-          <table className="w-full text-sm">
-            <thead><tr className="bg-blue-tint text-left">
-              <th className="px-4 py-2.5 font-semibold text-blue text-xs">Food</th>
-              <th className="px-4 py-2.5 font-semibold text-blue text-xs">From</th>
-              <th className="px-4 py-2.5 font-semibold text-blue text-xs">To</th>
-              <th className="px-4 py-2.5 font-semibold text-blue text-xs">Status</th>
-              <th className="px-4 py-2.5 font-semibold text-blue text-xs">Delivered</th>
-            </tr></thead>
-            <tbody>
-              {pickups.map(p => (
-                <tr key={p.pickup_id} className="border-t border-border">
-                  <td className="px-4 py-3 font-medium text-ink">{p.food_name}</td>
-                  <td className="px-4 py-3 text-muted text-xs">{p.pickup_from}</td>
-                  <td className="px-4 py-3 text-muted text-xs">{p.deliver_to}</td>
-                  <td className="px-4 py-3"><StatusBadge status={p.pickup_status} /></td>
-                  <td className="px-4 py-3 text-muted text-xs">{p.delivered_at ? new Date(p.delivered_at).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" }) : "—"}</td>
+      <div>
+        <h3 className="text-sm font-bold text-ink mb-3">Pickup history</h3>
+        {loading ? (
+          <div className="flex flex-col gap-2">
+            {[1, 2, 3].map(i => <Skeleton key={i} className="h-10 w-full" />)}
+          </div>
+        ) : !pickups || pickups.length === 0 ? (
+          <EmptyState message="No pickups yet." />
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-blue-tint text-left">
+                  {["Food", "Qty", "From", "To", "Status", "Delivered at"].map(h => (
+                    <th key={h} className="px-4 py-2.5 font-semibold text-blue text-xs whitespace-nowrap">{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
+              </thead>
+              <tbody>
+                {pickups.map(p => (
+                  <tr key={p.pickup_id} className="border-t border-border hover:bg-pink-tint/30 transition-colors">
+                    <td className="px-4 py-3 font-medium text-ink whitespace-nowrap">{p.food_name}</td>
+                    <td className="px-4 py-3 text-muted">{p.quantity_claimed}</td>
+                    <td className="px-4 py-3 text-muted text-xs max-w-[140px] truncate">{p.pickup_from}</td>
+                    <td className="px-4 py-3 text-muted text-xs max-w-[140px] truncate">{p.deliver_to}</td>
+                    <td className="px-4 py-3"><StatusBadge status={p.pickup_status} /></td>
+                    <td className="px-4 py-3 text-muted text-xs whitespace-nowrap">{fmtDate(p.delivered_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
       {/* Collections table */}
-      <p className="text-sm font-semibold text-ink mb-2">Waste collections</p>
-      {loading ? (
-        <Skeleton className="h-32 w-full rounded-xl" />
-      ) : collections.length === 0 ? (
-        <EmptyState message="No collections yet." />
-      ) : (
-        <div className="overflow-x-auto rounded-lg border border-border">
-          <table className="w-full text-sm">
-            <thead><tr className="bg-blue-tint text-left">
-              <th className="px-4 py-2.5 font-semibold text-blue text-xs">Partner</th>
-              <th className="px-4 py-2.5 font-semibold text-blue text-xs">Kg</th>
-              <th className="px-4 py-2.5 font-semibold text-blue text-xs">Receipt</th>
-              <th className="px-4 py-2.5 font-semibold text-blue text-xs">Collected</th>
-            </tr></thead>
-            <tbody>
-              {collections.map(c => (
-                <tr key={c.collection_id} className="border-t border-border">
-                  <td className="px-4 py-3 font-medium text-ink">{c.partner_name}</td>
-                  <td className="px-4 py-3 text-muted">{n(c.weighed_kg).toFixed(1)}</td>
-                  <td className="px-4 py-3 text-muted font-mono text-xs">{c.receipt_ref}</td>
-                  <td className="px-4 py-3 text-muted text-xs">{new Date(c.collected_at).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })}</td>
+      <div>
+        <h3 className="text-sm font-bold text-ink mb-3">Collection history</h3>
+        {loading ? (
+          <div className="flex flex-col gap-2">
+            {[1, 2].map(i => <Skeleton key={i} className="h-10 w-full" />)}
+          </div>
+        ) : !collections || collections.length === 0 ? (
+          <EmptyState message="No collections yet." />
+        ) : (
+          <div className="overflow-x-auto rounded-lg border border-border">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="bg-blue-tint text-left">
+                  {["Partner", "Kg", "Receipt ref", "Collected at"].map(h => (
+                    <th key={h} className="px-4 py-2.5 font-semibold text-blue text-xs whitespace-nowrap">{h}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </SectionWrap>
+              </thead>
+              <tbody>
+                {collections.map(c => (
+                  <tr key={c.collection_id} className="border-t border-border hover:bg-pink-tint/30 transition-colors">
+                    <td className="px-4 py-3 font-medium text-ink">{c.partner_name}</td>
+                    <td className="px-4 py-3 text-muted">{n(c.weighed_kg).toFixed(2)}</td>
+                    <td className="px-4 py-3">
+                      <span className="font-mono text-xs text-ink">{c.receipt_ref}</span>
+                    </td>
+                    <td className="px-4 py-3 text-muted text-xs whitespace-nowrap">{fmtDate(c.collected_at)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
   );
+}
+
+// ─── Tab definitions per vrole ────────────────────────────────────────────────
+
+type TabId = "food-deliveries" | "waste-runs" | "my-history";
+
+interface TabDef { id: TabId; label: string; icon: ReactNode }
+
+function tabsForVRole(vrole: string): TabDef[] {
+  const food:  TabDef = { id: "food-deliveries", label: "Food deliveries", icon: <Bike  size={14} /> };
+  const waste: TabDef = { id: "waste-runs",       label: "Waste runs",       icon: <Trash2 size={14} /> };
+  const hist:  TabDef = { id: "my-history",       label: "History",          icon: <History size={14} /> };
+  if (vrole === "FOOD_ONLY")  return [food, hist];
+  if (vrole === "WASTE_ONLY") return [waste, hist];
+  return [food, waste, hist];
+}
+
+function subtitleForVRole(vrole: string): string {
+  if (vrole === "FOOD_ONLY")  return "Food deliveries";
+  if (vrole === "WASTE_ONLY") return "Waste runs";
+  return "Food deliveries & waste runs";
 }
 
 // ─── Page root ────────────────────────────────────────────────────────────────
 
 export default function Volunteer() {
   const { toast } = useToast();
-  const [profile, setProfile] = useState<VolunteerProfile | null>(null);
-  const [tab,     setTab]     = useState<Tab | null>(null);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [, forceTick] = useState(0);
+  const [profile,  setProfile]  = useState<VolunteerProfile | null>(null);
+  const [loadingP, setLoadingP] = useState(true);
 
   useEffect(() => {
     call<VolunteerProfile>("data", "profile")
-      .then(p => {
-        setProfile(p);
-        // Determine which tabs to show
-        if (p.vrole === "FOOD_ONLY") setTab("food");
-        else if (p.vrole === "WASTE_ONLY") setTab("waste");
-        else setTab("food"); // DUAL defaults to food
-      })
-      .catch(err => toast(err instanceof Error ? err.message : "Could not load profile"));
-  }, []);
+      .then(setProfile)
+      .catch(err => toast(err instanceof Error ? err.message : "Could not load profile"))
+      .finally(() => setLoadingP(false));
+  }, [toast]);
 
-  const onRefresh = () => setRefreshKey(k => k + 1);
+  const vrole   = profile?.vrole ?? "FOOD_ONLY";
+  const tabs    = tabsForVRole(vrole);
+  const [activeTab, setActiveTab] = useState<TabId>("food-deliveries");
 
-  const tabs: { id: Tab; label: string; show: boolean }[] = [
-    { id: "food",    label: "Food deliveries", show: profile?.vrole === "FOOD_ONLY" || profile?.vrole === "DUAL" },
-    { id: "waste",   label: "Waste runs",      show: profile?.vrole === "WASTE_ONLY" || profile?.vrole === "DUAL" },
-    { id: "history", label: "My history",      show: true },
-  ];
+  // Ensure activeTab is valid for this vrole
+  useEffect(() => {
+    if (!tabs.find(t => t.id === activeTab)) {
+      setActiveTab(tabs[0].id);
+    }
+  }, [vrole, tabs, activeTab]);
+
+  const subtitle = loadingP ? "" : subtitleForVRole(vrole);
 
   return (
-    <DashboardShell role="VOLUNTEER">
+    <DashboardShell role="VOLUNTEER" title="Volunteer" subtitle={subtitle}>
       {/* Tab bar */}
       <div className="flex gap-0 mb-8 border border-border rounded-lg overflow-hidden w-fit text-sm font-semibold">
-        {tabs.filter(t => t.show).map(t => (
+        {tabs.map(t => (
           <button
             key={t.id}
-            onClick={() => setTab(t.id)}
-            className={`px-5 py-2 transition-colors ${
-              tab === t.id ? "bg-pink text-white" : "bg-white text-muted hover:text-ink"
-            }`}
+            onClick={() => setActiveTab(t.id)}
+            className={[
+              "flex items-center gap-1.5 px-5 py-2 transition-colors",
+              activeTab === t.id
+                ? "bg-pink text-white"
+                : "bg-card text-muted hover:text-ink",
+            ].join(" ")}
           >
+            {t.icon}
             {t.label}
           </button>
         ))}
       </div>
 
       {/* Tab content */}
-      {tab === "food"    && <FoodDeliveriesSection onRefresh={onRefresh} />}
-      {tab === "waste"   && <WasteRunsSection      onRefresh={onRefresh} />}
-      {tab === "history" && <HistorySection />}
+      {activeTab === "food-deliveries" && <FoodDeliveriesTab />}
+      {activeTab === "waste-runs"      && <WasteRunsTab />}
+      {activeTab === "my-history"      && <HistoryTab />}
     </DashboardShell>
   );
 }
