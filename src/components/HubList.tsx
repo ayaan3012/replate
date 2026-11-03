@@ -47,7 +47,7 @@ export default function HubList({ hubs, selectedHubId, onSelect }: Props) {
                 transition-all duration-150
                 ${isSelected
                   ? "border-pink bg-pink-tint shadow-glow-pink"
-                  : "border-border bg-white hover:border-pink hover:bg-pink-tint/40 shadow-sm hover:shadow-md"
+                  : "border-border bg-card hover:border-pink hover:bg-pink-tint/40 shadow-sm hover:shadow-md"
                 }
               `}
             >

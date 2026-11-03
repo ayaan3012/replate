@@ -79,7 +79,7 @@ export default function AddressSearch({ onResult, prefill }: Props) {
             onKeyDown={e => { if (e.key === "Enter") search(); }}
             placeholder="Enter an address…"
             className="
-              w-full pl-8 pr-3 py-2 rounded border border-border bg-white
+              w-full pl-8 pr-3 py-2 rounded border border-border bg-card
               text-sm text-ink placeholder:text-muted
               focus:outline-none focus:border-pink focus:shadow-glow-pink
               transition-shadow

@@ -27,14 +27,10 @@ export default function App() {
       <AuthProvider>
         <ToastProvider>
           <Routes>
-            {/* Public routes — wrapped in shared Layout (Nav + About) */}
+            {/* Public routes */}
             <Route
               path="/"
-              element={
-                <Layout>
-                  <Home />
-                </Layout>
-              }
+              element={<Home />}
             />
             <Route
               path="/hub"

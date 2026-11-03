@@ -2,7 +2,7 @@
   "devCommand": "npm run dev",
   "rewrites": [
     {
-      "source": "/((?!api/).*)",
+      "source": "/((?!api/|@vite/|@react-refresh|@fs/|src/|node_modules/|assets/|.*\\..*).*)",
       "destination": "/index.html"
     }
   ]

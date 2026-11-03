@@ -1,21 +1,14 @@
 import type { Config } from "tailwindcss";
 
-/**
- * All colour values reference CSS variables defined in src/index.css.
- * This means:
- *   - Tailwind classes like `bg-pink`, `text-ink`, `border-border` work everywhere.
- *   - Changing a variable in index.css changes the whole app automatically.
- *   - No raw hex is ever written in component files.
- */
 export default {
+  darkMode: "class",
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
   theme: {
-    // Override (not extend) colours so Tailwind's default palette doesn't
-    // pollute autocomplete with hundreds of unused names.
     colors: {
       transparent: "transparent",
       current:     "currentColor",
       white:       "var(--color-bg)",
+      card:        "var(--color-card)",
       pink:        "var(--color-pink)",
       blue:        "var(--color-blue)",
       ink:         "var(--color-ink)",

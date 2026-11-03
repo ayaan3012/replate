@@ -108,7 +108,7 @@ export default function HubPage() {
           value={selectedId ?? ""}
           onChange={e => { setSelectedId(Number(e.target.value)); setResult(null); }}
           disabled={loadingHubs}
-          className="flex-1 px-3 py-2.5 rounded-lg border border-border bg-white text-sm text-ink focus:outline-none focus:border-pink focus:shadow-glow-pink transition-shadow"
+          className="flex-1 px-3 py-2.5 rounded-lg border border-border bg-card text-sm text-ink focus:outline-none focus:border-pink focus:shadow-glow-pink transition-shadow"
         >
           {loadingHubs && <option>Loading…</option>}
           {hubs.map(h => (
@@ -144,7 +144,7 @@ export default function HubPage() {
                   key={c.compartment_id}
                   className={`rounded-lg border-2 p-3 ${
                     c.accepting ? "border-success" : "border-border"
-                  } bg-white shadow-sm`}
+                  } bg-card shadow-sm`}
                 >
                   <div className="flex items-center justify-between mb-2">
                     <span className="font-bold text-lg text-ink">{c.label}</span>
@@ -192,7 +192,7 @@ export default function HubPage() {
       )}
 
       {/* Keypad panel */}
-      <div className="rounded-2xl border-2 border-border bg-white p-6 shadow-md">
+      <div className="rounded-2xl border-2 border-border bg-card p-6 shadow-md">
         <p className="text-sm font-bold text-ink mb-4 text-center">Enter your code</p>
 
         <div className="flex flex-col gap-4 max-w-xs mx-auto">
@@ -204,7 +204,7 @@ export default function HubPage() {
               value={orderNum}
               onChange={e => setOrderNum(e.target.value)}
               placeholder="#"
-              className="px-3 py-3 rounded-lg border border-border bg-white text-lg text-center font-bold text-ink focus:outline-none focus:border-pink focus:shadow-glow-pink transition-shadow"
+              className="px-3 py-3 rounded-lg border border-border bg-card text-lg text-center font-bold text-ink focus:outline-none focus:border-pink focus:shadow-glow-pink transition-shadow"
             />
           </label>
 
@@ -218,7 +218,7 @@ export default function HubPage() {
               value={code}
               onChange={e => setCode(e.target.value.replace(/\D/g, ""))}
               placeholder="000000"
-              className="px-3 py-3 rounded-lg border border-border bg-white text-2xl text-center font-mono font-bold tracking-[0.4em] text-ink focus:outline-none focus:border-pink focus:shadow-glow-pink transition-shadow"
+              className="px-3 py-3 rounded-lg border border-border bg-card text-2xl text-center font-mono font-bold tracking-[0.4em] text-ink focus:outline-none focus:border-pink focus:shadow-glow-pink transition-shadow"
             />
           </label>
 
