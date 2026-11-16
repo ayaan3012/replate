@@ -6,8 +6,19 @@
  *   selectedHubId — highlights the selected card
  *   onSelect      — called when a card is clicked
  */
-import { Thermometer, Wind, Package, CheckCircle, XCircle } from "lucide-react";
+import { Thermometer, Wind, Package, CheckCircle, XCircle, AlertCircle } from "lucide-react";
 import { n, type Hub } from "@/lib/api";
+
+// ─── 3-state accepting badge helper ──────────────────────────────────────────
+// accepting=1 AND at least one compartment has free_kg > 0  → green "Accepting"
+// accepting=1 AND every compartment has free_kg = 0         → red   "Full"
+// accepting=0                                               → amber "Not accepting…"
+function hubAcceptingState(hub: Hub): "accepting" | "full" | "not-accepting" {
+  const anyAccepting = hub.compartments.some(c => c.accepting);
+  if (!anyAccepting) return "not-accepting";
+  const anyFree = hub.compartments.some(c => n(c.free_kg) > 0);
+  return anyFree ? "accepting" : "full";
+}
 
 interface Props {
   hubs:          Hub[];
@@ -36,7 +47,12 @@ export default function HubList({ hubs, selectedHubId, onSelect }: Props) {
 
         const freeKgCold    = cold.reduce((s, c) => s + n(c.free_kg), 0);
         const freeKgAmbient = ambient.reduce((s, c) => s + n(c.free_kg), 0);
-        const anyAccepting  = hub.compartments.some(c => c.accepting);
+        const acceptState   = hubAcceptingState(hub);
+
+        // Format last check-in time
+        const lastCheckin = hub.last_checkin
+          ? new Date(hub.last_checkin).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })
+          : null;
 
         return (
           <li key={hub.hub_id}>
@@ -58,21 +74,34 @@ export default function HubList({ hubs, selectedHubId, onSelect }: Props) {
                   <p className="text-xs text-muted truncate">{hub.address}</p>
                 </div>
 
-                {/* Accepting badge */}
-                <span
-                  className={`
-                    shrink-0 flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full
-                    ${anyAccepting
-                      ? "bg-success-tint text-success"
-                      : "bg-error-tint text-error"}
-                  `}
-                >
-                  {anyAccepting
-                    ? <CheckCircle size={11} />
-                    : <XCircle size={11} />
-                  }
-                  {anyAccepting ? "Accepting" : "Full"}
-                </span>
+                {/* 3-state accepting badge */}
+                {acceptState === "accepting" && (
+                  <span className="shrink-0 flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-success-tint text-success">
+                    <CheckCircle size={11} />
+                    Accepting
+                  </span>
+                )}
+                {acceptState === "full" && (
+                  <span className="shrink-0 flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-error-tint text-error">
+                    <XCircle size={11} />
+                    Full
+                  </span>
+                )}
+                {acceptState === "not-accepting" && (
+                  <div className="shrink-0 flex flex-col items-end gap-0.5">
+                    <span className="flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full"
+                      style={{ background: "rgba(217,119,6,.12)", color: "#b45309" }}>
+                      <AlertCircle size={11} />
+                      Not accepting
+                    </span>
+                    {lastCheckin && (
+                      <span className="text-[10px] text-muted">Steward check-in needed · Last: {lastCheckin}</span>
+                    )}
+                    {!lastCheckin && (
+                      <span className="text-[10px] text-muted">Steward check-in needed</span>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* Stats row */}

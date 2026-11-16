@@ -9,7 +9,7 @@
 import { useEffect, useState } from "react";
 import {
   Thermometer, Wind, Lock, Unlock, Loader2, CheckCircle,
-  XCircle, AlertTriangle, Shield,
+  XCircle, AlertTriangle, Shield, AlertCircle,
 } from "lucide-react";
 import { call, n, type Hub, type KioskResponse } from "@/lib/api";
 import { useToast } from "@/context/ToastContext";

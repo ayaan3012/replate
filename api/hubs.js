@@ -42,16 +42,32 @@ const groupHubs = (rows, withDistance) => {
 const attachAvailableItems = async (hubs) => {
   if (hubs.length === 0) return hubs;
   const ids = hubs.map(h => h.hub_id);
+  const ph  = ids.map(() => "?").join(",");
+
   const [counts] = await pool.query(
     `SELECT hub_id, COUNT(*) cnt
        FROM FOOD_LISTING
-      WHERE hub_id IN (${ids.map(() => "?").join(",")})
+      WHERE hub_id IN (${ph})
         AND status = 'AVAILABLE' AND expires_at > NOW()
       GROUP BY hub_id`,
     ids
   );
   const cntMap = new Map(counts.map(c => [c.hub_id, c.cnt]));
-  for (const h of hubs) h.available_items = cntMap.get(h.hub_id) || 0;
+
+  // last_checkin = most recent logged_at in HUB_LOG for each hub
+  const [logs] = await pool.query(
+    `SELECT hub_id, MAX(logged_at) AS last_checkin
+       FROM HUB_LOG
+      WHERE hub_id IN (${ph})
+      GROUP BY hub_id`,
+    ids
+  );
+  const logMap = new Map(logs.map(l => [l.hub_id, l.last_checkin]));
+
+  for (const h of hubs) {
+    h.available_items = cntMap.get(h.hub_id) || 0;
+    h.last_checkin    = logMap.get(h.hub_id) || null;
+  }
   return hubs;
 };
 

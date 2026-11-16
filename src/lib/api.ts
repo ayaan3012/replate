@@ -268,6 +268,7 @@ export interface Hub {
   status:          string;
   distance_km?:    string | number;
   available_items: number;
+  last_checkin?:   string | null;   // ISO timestamp from HUB_LOG, null if never checked in
   compartments:    Compartment[];
 }
 
