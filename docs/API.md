@@ -260,6 +260,8 @@ Records food that is not fit for human consumption and routes it to the best ava
   - `unit` (string, required)
   - `weight` (number, required): kg per unit.
   - `grade` (string, required): `"ANIMAL_OK"` or `"BIOGAS_ONLY"`.
+  - `destination` (string, optional): `"DONOR_SITE"` (default) or `"HUB_BIN"`. When `"HUB_BIN"`, the food is placed directly into a hub waste bin.
+  - `bin_id` (number, required when `destination` is `"HUB_BIN"`): The `HUB_BIN.bin_id` to drop into.
 - **Partner selection** (`kg = qty × weight`):
   - `ANIMAL_OK` → `fn_pick_partner('FARM', category_id, kg)`, fallback `fn_pick_partner('ANIMAL_SHELTER', category_id, kg)`.
   - `BIOGAS_ONLY` → `fn_pick_partner('BIOGAS', category_id, kg)`.
@@ -268,10 +270,47 @@ Records food that is not fit for human consumption and routes it to the best ava
   1. `INSERT FOOD_LISTING` (storage `AMBIENT`, `ready_at = NOW()-2h`, `expires_at = NOW()-1h`).
   2. `INSERT WASTE_ROUTING` (listing_id, route_type from partner's `partner_type`, partner_id, grade, kg).
   3. `UPDATE FOOD_LISTING SET status='ROUTED'`.
+  4. When `destination = 'HUB_BIN'`: validates that the bin's `bin_type` matches the grade (`ANIMAL_OK` → `ANIMAL`, `BIOGAS_ONLY` → `BIOGAS`; returns `400 { "error": "This bin does not accept <grade> food" }` on mismatch), then `INSERT INTO HUB_BIN_DROP (bin_id, waste_id)`. The `HUB_BIN_DROP` insert trigger enforces hub-active, routing pending+uncollected, bin-type, and capacity; its message is returned verbatim on failure.
 - **Response Fields**:
   - `partner_name`: string
   - `route_type`: string (the partner's `partner_type`)
   - `kg`: number
+  - `destination`: string (`"DONOR_SITE"` or `"HUB_BIN"`)
+  - `hub_name`: string (only when `destination` is `"HUB_BIN"`)
+  - `hub_address`: string (only when `destination` is `"HUB_BIN"`)
+  - `bin_label`: string (only when `destination` is `"HUB_BIN"`)
+
+### 23. Unclaimed Listings (`unclaimed`) — Donor
+Returns this donor's food listings that are AVAILABLE, have no hub, and expire within 2 hours (including already expired). Used to prompt the donor to decide what to do.
+
+- **Role Required**: `DONOR`
+- **Method**: `GET` (or `POST`)
+- **Query Parameter**: `a=unclaimed`
+- **Filtering**: `status = 'AVAILABLE'`, `quantity_remaining > 0`, `hub_id IS NULL`, `expires_at <= NOW() + INTERVAL 2 HOUR`
+- **Side effect**: `myListings` and `wasteJobs` both auto-call `sp_route_expired_food()` at most once every 10 minutes (module-level timestamp throttle).
+- **Response Fields**: Array of:
+  - `listing_id`: number
+  - `food_name`: string
+  - `quantity_remaining`: string (DECIMAL)
+  - `quantity_unit`: string
+  - `kg_left`: string (DECIMAL — `quantity_remaining × weight_per_unit_kg`)
+  - `expires_at`: ISO timestamp
+  - `minutes_left`: number (negative when already expired)
+
+### 24. Route Unclaimed (`routeUnclaimed`) — Donor
+Routes an existing unclaimed listing (AVAILABLE, no hub) to a waste partner. Same transaction logic as `reportUnfit` applied to the existing listing.
+
+- **Role Required**: `DONOR`
+- **Method**: `POST`
+- **Query Parameter**: `a=routeUnclaimed`
+- **Request Body**:
+  - `listing_id` (number, required)
+  - `grade` (string, required): `"ANIMAL_OK"` or `"BIOGAS_ONLY"`
+  - `destination` (string, optional): `"DONOR_SITE"` (default) or `"HUB_BIN"`
+  - `bin_id` (number, required when `destination` is `"HUB_BIN"`)
+- **Validation**: Verifies the listing belongs to this donor, has status `AVAILABLE`, and `hub_id IS NULL`.
+- **Transaction**: Partner pick → `INSERT WASTE_ROUTING (quantity_kg = kg_left)` → `UPDATE FOOD_LISTING SET status='ROUTED'` → (if `HUB_BIN`) `INSERT HUB_BIN_DROP`.
+- **Response Fields**: Same shape as `reportUnfit`.
 
 ### 6. My Listings (`myListings`)
 Returns all listings created by the logged-in donor, including hub handover details for hub listings.
@@ -499,6 +538,11 @@ Returns all unassigned waste routings available for collection.
   - `partner_id`: number
   - `partner_name`: string
   - `partner_address`: string
+  - `pickup_type`: string (`"HUB_BIN"` or `"DONOR_SITE"`)
+  - `hub_id`: number | null (present for `HUB_BIN` items; null for `DONOR_SITE`)
+  - `hub_name`: string | null (`HUB_BIN` only)
+  - `hub_address`: string | null (`HUB_BIN` only)
+  - `bin_label`: string | null (`HUB_BIN` only)
 
 ### 18. Waste Slots (`wasteSlots`) — Volunteer / Waste
 Returns available waste-run slots for this volunteer. Calls `sp_ensure_slots(7)` first.
@@ -550,7 +594,9 @@ Records a waste collection run in a single transaction. All `waste_ids` must bel
   - `weighed_kg` (number, required): Actual measured weight.
 - **Transaction steps**:
   1. Validate all `waste_ids` share exactly one partner; rollback if not.
-  2. `INSERT WASTE_COLLECTION` with `source_type = 'DONOR_SITE'` and `receipt_ref = 'RCPT-<partner_id>-<timestamp>'`.
+  1a. After single-partner check: query pickup type for all waste_ids. If items are mixed (some `HUB_BIN`, some `DONOR_SITE`) or from different hubs → rollback and return `400 { "error": "Collect hub-bin items and donor-site items separately, one hub at a time" }`.
+  1b. All `DONOR_SITE` → `source_type = 'DONOR_SITE'`, `hub_id = NULL`. All `HUB_BIN` from one hub → `source_type = 'HUB'`, `hub_id = <that hub>`.
+  2. `INSERT WASTE_COLLECTION` with the computed `source_type` and `hub_id`, and `receipt_ref = 'RCPT-<partner_id>-<timestamp>'`.
   3. `UPDATE WASTE_ROUTING SET collection_id = <new id>` for all matching pending rows (trigger sets `status = 'COMPLETED'`).
 - **Response Fields**:
   - `ok`: number (`1`)
@@ -609,6 +655,12 @@ Returns all hubs with their compartments, optionally sorted by distance to a giv
   - `distance_km`: number (only present when `lat` and `lng` are provided; rounded to 1 decimal, computed via `fn_distance_km`)
   - `available_items`: number (count of `FOOD_LISTING` rows with this `hub_id`, status `'AVAILABLE'` and `expires_at > NOW()`)
   - `last_checkin`: ISO timestamp string | `null` — most recent `logged_at` from `HUB_LOG` for this hub; `null` if the hub has never had a steward check-in. Use this to show "Steward check-in needed" when `accepting = 0`.
+  - `bins`: Array of waste-bin objects (empty array when hub has none):
+    - `bin_id`: number
+    - `bin_type`: string (`"ANIMAL"` or `"BIOGAS"`)
+    - `label`: string
+    - `max_weight_kg`: string (DECIMAL)
+    - `free_kg`: string (DECIMAL)
   - `compartments`: Array of:
     - `compartment_id`: number
     - `label`: string
@@ -624,7 +676,7 @@ Returns the 3 closest hubs with status `'ACTIVE'`, same shape as `list`.
   - `a=nearest`: Action identifier.
   - `lat` (number, required): Latitude.
   - `lng` (number, required): Longitude.
-- **Response Fields**: Array of up to 3 hub objects (same shape as `list`, always includes `distance_km`).
+- **Response Fields**: Array of up to 3 hub objects (same shape as `list`, always includes `distance_km` and `bins`).
 - **Error Response (400)**:
   ```json
   { "error": "lat and lng are required" }

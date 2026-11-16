@@ -91,6 +91,8 @@ const EXPECTED = {
     "impact_id","pickup_id","handover_id","collection_id",
     "meals_saved","kg_diverted","co2_avoided_kg","recorded_at"
   ],
+  HUB_BIN: ["bin_id","hub_id","bin_type","label","max_weight_kg"],
+  HUB_BIN_DROP: ["drop_id","bin_id","waste_id","dropped_at"],
 };
 
 // ─── Connect ─────────────────────────────────────────────────────────────────
@@ -115,7 +117,14 @@ const [rows] = await conn.query(
    ORDER BY TABLE_NAME, ORDINAL_POSITION`,
   [dbName]
 );
+
+// Check views
+const [viewRows] = await conn.query(
+  'SELECT TABLE_NAME FROM information_schema.VIEWS WHERE TABLE_SCHEMA = ?',
+  [dbName]
+);
 await conn.end();
+const views = new Set(viewRows.map(r => String(r.TABLE_NAME).toLowerCase()));
 
 // Build lookup: tableName → Set<columnName> (case-insensitive)
 const actual = new Map();
@@ -141,6 +150,11 @@ for (const [table, cols] of Object.entries(EXPECTED)) {
       missingCount++;
     }
   }
+}
+
+if (!views.has('v_hub_bin_status')) {
+  console.log('MISSING  view  v_hub_bin_status');
+  missingCount++;
 }
 
 if (missingCount === 0) {

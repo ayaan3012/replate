@@ -483,6 +483,65 @@ if (wasteRoutingId && wasteSlotId && containerId) {
   fail("myCollections", "skipped");
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// 5. HUB BIN FLOW
+// ═══════════════════════════════════════════════════════════════════════════════
+section("5. Hub bin flow");
+
+{
+  // Find a hub with an ANIMAL bin that has free_kg > 0
+  const hubsR = await get("/api/hubs?a=list");
+  const hubs = Array.isArray(hubsR.body) ? hubsR.body : [];
+  let testBin = null, testHub = null;
+  for (const h of hubs) {
+    if (!Array.isArray(h.bins)) continue;
+    const b = h.bins.find(b => b.bin_type === 'ANIMAL' && Number(b.free_kg) > 0);
+    if (b) { testBin = b; testHub = h; break; }
+  }
+  if (!testBin || !testHub) {
+    fail("hub bin flow", "skipped — no ANIMAL hub bins with free_kg > 0 in DB");
+  } else {
+    // reportUnfit with HUB_BIN
+    const r1 = await post("/api/data?a=reportUnfit", {
+      category_id: categoryId,
+      food_name: "Smoke Hub Bin Test",
+      qty: 1, unit: "kg", weight: 0.5,
+      grade: "ANIMAL_OK",
+      destination: "HUB_BIN",
+      bin_id: testBin.bin_id,
+    }, donor);
+    check("reportUnfit HUB_BIN ok", r1.status === 200 && r1.body.destination === "HUB_BIN", r1.body);
+    check("reportUnfit HUB_BIN has hub_name", !!r1.body.hub_name, r1.body);
+    check("reportUnfit HUB_BIN has bin_label", !!r1.body.bin_label, r1.body);
+
+    // wasteJobs should include a HUB_BIN item
+    const r2 = await get("/api/data?a=wasteJobs", volunteer);
+    const hubBinJob = Array.isArray(r2.body) ? r2.body.find(j => j.pickup_type === 'HUB_BIN' && j.hub_id === testHub.hub_id) : null;
+    check("wasteJobs has HUB_BIN item", !!hubBinJob, { pickup_type: hubBinJob?.pickup_type, hub_id: hubBinJob?.hub_id });
+
+    if (hubBinJob && wasteSlotId && containerId) {
+      // collect the hub-bin job
+      const r3 = await post("/api/data?a=collect", {
+        waste_ids: [hubBinJob.waste_id],
+        slot_id: wasteSlotId,
+        container_id: containerId,
+        vehicle_no: "DL01HUBBIN",
+        weighed_kg: 0.5,
+      }, volunteer);
+      check("collect HUB_BIN ok", r3.status === 200 && r3.body.ok === 1, r3.body);
+
+      // hub bin free_kg should be a number after collect
+      const r4 = await get("/api/hubs?a=list");
+      const updHub = Array.isArray(r4.body) ? r4.body.find(h => h.hub_id === testHub.hub_id) : null;
+      const updBin = updHub?.bins?.find(b => b.bin_id === testBin.bin_id);
+      check("hub bin free_kg is numeric after collect", isNumeric(updBin?.free_kg), updBin);
+    } else {
+      fail("collect HUB_BIN", "skipped — missing wasteSlotId, containerId, or hubBinJob");
+      fail("hub bin free_kg check", "skipped");
+    }
+  }
+}
+
 // ─── summary ─────────────────────────────────────────────────────────────────
 console.log(`\n${"─".repeat(48)}`);
 console.log(`  ${passed + failed} checks: ${passed} passed, ${failed} failed`);
