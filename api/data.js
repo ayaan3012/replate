@@ -8,6 +8,26 @@ const needVolunteerRole = (vrole, type) => {
     throw new Error("Your volunteer role does not include waste runs");
 };
 
+// Auto-route unanswered expired food at most once every 10 minutes (module-level throttle).
+let _lastAutoRoute = 0;
+async function maybeAutoRoute() {
+  if (Date.now() - _lastAutoRoute < 10 * 60 * 1000) return;
+  _lastAutoRoute = Date.now();
+  try { await pool.query("CALL sp_route_expired_food()"); } catch (_) {}
+}
+
+// Drop a routed waste item into a hub bin. Pre-checks the bin type against the food
+// grade (ANIMAL_OK -> ANIMAL, BIOGAS_ONLY -> BIOGAS); the HUB_BIN_DROP insert trigger is
+// the real enforcer (capacity / hub-state / routing state) and its message surfaces as
+// e.sqlMessage via the caller's outer errJson. Errors propagate by throwing.
+async function dropIntoBin(conn, binId, wasteId, grade) {
+  const [[b]] = await conn.query("SELECT bin_type FROM HUB_BIN WHERE bin_id=?", [binId]);
+  if (!b) throw new Error("Bin not found");
+  const wants = grade === "ANIMAL_OK" ? "ANIMAL" : "BIOGAS";
+  if (b.bin_type !== wants) throw new Error(`This bin does not accept ${grade} food`);
+  await conn.query("INSERT INTO HUB_BIN_DROP (bin_id, waste_id) VALUES (?, ?)", [binId, wasteId]);
+}
+
 module.exports = async (req, res) => {
   const u = user(req);
   if (!u) return res.status(401).json({ error: "Please log in" });
@@ -110,7 +130,7 @@ module.exports = async (req, res) => {
       // ── reportUnfit ─────────────────────────────────────────────────────────
       case "reportUnfit": {
         need("DONOR");
-        const { category_id, food_name, qty, unit, weight, grade } = b;
+        const { category_id, food_name, qty, unit, weight, grade, destination = "DONOR_SITE", bin_id } = b;
         if (!["ANIMAL_OK", "BIOGAS_ONLY"].includes(grade))
           return res.status(400).json({ error: "grade must be ANIMAL_OK or BIOGAS_ONLY" });
 
@@ -152,17 +172,46 @@ module.exports = async (req, res) => {
 
           // WASTE_ROUTING columns: waste_id, listing_id, route_type, quantity_kg, status, routed_at,
           //                        partner_id, collection_id, condition_grade
-          await conn.query(
+          const [wrIns] = await conn.query(
             `INSERT INTO WASTE_ROUTING (listing_id, route_type, partner_id, condition_grade, quantity_kg)
              VALUES (?, ?, ?, ?, ?)`,
             [listingId, partner.partner_type, partnerId, grade, kg]);
+          const wasteId = wrIns.insertId;
 
           await conn.query(
             "UPDATE FOOD_LISTING SET status='ROUTED' WHERE listing_id=?",
             [listingId]);
 
+          if (destination === "HUB_BIN") {
+            if (bin_id === undefined || bin_id === null || bin_id === "") {
+              await conn.rollback();
+              return res.status(400).json({ error: "bin_id is required for HUB_BIN" });
+            }
+            // dropIntoBin pre-checks bin_type; the HUB_BIN_DROP trigger enforces the rest.
+            await dropIntoBin(conn, Number(bin_id), wasteId, grade);
+          }
+
           await conn.commit();
-          return res.json({ partner_name: partner.partner_name, route_type: partner.partner_type, kg });
+
+          if (destination === "HUB_BIN") {
+            const [[hubBin]] = await conn.query(
+              `SELECT ch.name AS hub_name, ch.address AS hub_address, hb.label AS bin_label
+                 FROM HUB_BIN hb
+                 JOIN COMMUNITY_HUB ch ON ch.hub_id = hb.hub_id
+                WHERE hb.bin_id = ?`,
+              [Number(bin_id)]);
+            return res.json({
+              partner_name: partner.partner_name,
+              route_type: partner.partner_type,
+              kg,
+              destination: "HUB_BIN",
+              hub_name: hubBin ? hubBin.hub_name : null,
+              hub_address: hubBin ? hubBin.hub_address : null,
+              bin_label: hubBin ? hubBin.bin_label : null
+            });
+          }
+
+          return res.json({ partner_name: partner.partner_name, route_type: partner.partner_type, kg, destination: "DONOR_SITE" });
         } catch (e) {
           await conn.rollback();
           throw e;
@@ -174,6 +223,7 @@ module.exports = async (req, res) => {
       // ── myListings ──────────────────────────────────────────────────────────
       case "myListings": {
         need("DONOR");
+        await maybeAutoRoute();
         const listings = await q(
           `SELECT l.listing_id, l.food_name, l.status, l.expires_at,
                   l.quantity_unit, v.quantity_remaining,
@@ -231,6 +281,136 @@ module.exports = async (req, res) => {
            WHERE l.donor_id = ?
            ORDER BY wr.waste_id DESC`,
           [u.pid]) || []);
+      }
+
+      // ── unclaimed ───────────────────────────────────────────────────────────
+      // This donor's AVAILABLE listings that expire within 2h (incl. already expired),
+      // are not at a hub, and still have quantity left — awaiting the donor's decision.
+      case "unclaimed": {
+        need("DONOR");
+        await maybeAutoRoute();
+        return res.json(await q(
+          `SELECT l.listing_id, l.food_name, v.quantity_remaining, l.quantity_unit,
+                  v.quantity_remaining * l.weight_per_unit_kg AS kg_left,
+                  l.expires_at,
+                  TIMESTAMPDIFF(MINUTE, NOW(), l.expires_at) AS minutes_left
+           FROM FOOD_LISTING l
+           JOIN v_listing_remaining v ON v.listing_id = l.listing_id
+           WHERE l.donor_id = ?
+             AND l.status = 'AVAILABLE'
+             AND v.quantity_remaining > 0
+             AND l.hub_id IS NULL
+             AND l.expires_at <= NOW() + INTERVAL 2 HOUR
+           ORDER BY l.expires_at`,
+          [u.pid]) || []);
+      }
+
+      // ── routeUnclaimed ───────────────────────────────────────────────────────
+      // Route an existing unclaimed listing to a partner (optionally via a hub bin).
+      case "routeUnclaimed": {
+        need("DONOR");
+        const { listing_id, grade, destination = "DONOR_SITE", bin_id } = b;
+        if (!["ANIMAL_OK", "BIOGAS_ONLY"].includes(grade))
+          return res.status(400).json({ error: "grade must be ANIMAL_OK or BIOGAS_ONLY" });
+        if (!["DONOR_SITE", "HUB_BIN"].includes(destination))
+          return res.status(400).json({ error: "destination must be DONOR_SITE or HUB_BIN" });
+
+        const conn = await pool.getConnection();
+        try {
+          await conn.beginTransaction();
+
+          // Verify ownership + state: must be this donor's, AVAILABLE, not at a hub.
+          const [[row]] = await conn.query(
+            "SELECT listing_id, donor_id, status, hub_id, category_id FROM FOOD_LISTING WHERE listing_id=?",
+            [listing_id]);
+          if (!row) {
+            await conn.rollback();
+            return res.status(400).json({ error: "Listing not found" });
+          }
+          if (row.donor_id !== u.pid) {
+            await conn.rollback();
+            return res.status(400).json({ error: "You can only route your own listings" });
+          }
+          if (row.status !== "AVAILABLE") {
+            await conn.rollback();
+            return res.status(400).json({ error: "Only AVAILABLE listings can be routed" });
+          }
+          if (row.hub_id !== null) {
+            await conn.rollback();
+            return res.status(400).json({ error: "Hub listings are routed through the hub" });
+          }
+
+          const [[kgRow]] = await conn.query(
+            `SELECT v.quantity_remaining * l.weight_per_unit_kg AS kg_left
+               FROM v_listing_remaining v
+               JOIN FOOD_LISTING l USING(listing_id)
+              WHERE l.listing_id = ?`,
+            [listing_id]);
+          const kg = Number(kgRow && kgRow.kg_left) || 0;
+
+          // Same partner picking as reportUnfit: FARM then ANIMAL_SHELTER fallback for ANIMAL_OK; BIOGAS otherwise.
+          const categoryId = row.category_id;
+          let [[partnerRow]] = await conn.query(
+            "SELECT fn_pick_partner(?, ?, ?) AS partner_id",
+            [grade === "ANIMAL_OK" ? "FARM" : "BIOGAS", categoryId, kg]);
+          if ((!partnerRow || !partnerRow.partner_id) && grade === "ANIMAL_OK") {
+            [[partnerRow]] = await conn.query(
+              "SELECT fn_pick_partner('ANIMAL_SHELTER', ?, ?) AS partner_id",
+              [categoryId, kg]);
+          }
+          if (!partnerRow || !partnerRow.partner_id) {
+            await conn.rollback();
+            return res.status(400).json({ error: "No partner accepts this food right now" });
+          }
+          const partnerId = partnerRow.partner_id;
+
+          const [[partner]] = await conn.query(
+            "SELECT name AS partner_name, partner_type FROM WASTE_PARTNER WHERE partner_id=?",
+            [partnerId]);
+
+          const [wrIns] = await conn.query(
+            `INSERT INTO WASTE_ROUTING (listing_id, route_type, partner_id, condition_grade, quantity_kg)
+             VALUES (?, ?, ?, ?, ?)`,
+            [listing_id, partner.partner_type, partnerId, grade, kg]);
+          const wasteId = wrIns.insertId;
+
+          await conn.query("UPDATE FOOD_LISTING SET status='ROUTED' WHERE listing_id=?", [listing_id]);
+
+          if (destination === "HUB_BIN") {
+            if (bin_id === undefined || bin_id === null || bin_id === "") {
+              await conn.rollback();
+              return res.status(400).json({ error: "bin_id is required for HUB_BIN" });
+            }
+            await dropIntoBin(conn, Number(bin_id), wasteId, grade);
+          }
+
+          await conn.commit();
+
+          if (destination === "HUB_BIN") {
+            const [[hubBin]] = await conn.query(
+              `SELECT ch.name AS hub_name, ch.address AS hub_address, hb.label AS bin_label
+                 FROM HUB_BIN hb
+                 JOIN COMMUNITY_HUB ch ON ch.hub_id = hb.hub_id
+                WHERE hb.bin_id = ?`,
+              [Number(bin_id)]);
+            return res.json({
+              partner_name: partner.partner_name,
+              route_type: partner.partner_type,
+              kg,
+              destination: "HUB_BIN",
+              hub_name: hubBin ? hubBin.hub_name : null,
+              hub_address: hubBin ? hubBin.hub_address : null,
+              bin_label: hubBin ? hubBin.bin_label : null
+            });
+          }
+
+          return res.json({ partner_name: partner.partner_name, route_type: partner.partner_type, kg, destination: "DONOR_SITE" });
+        } catch (e) {
+          await conn.rollback();
+          throw e;
+        } finally {
+          conn.release();
+        }
       }
 
       // ── feed ────────────────────────────────────────────────────────────────
@@ -628,6 +808,7 @@ module.exports = async (req, res) => {
       //   status, routed_at, partner_id, collection_id, condition_grade
       case "wasteJobs": {
         need("VOLUNTEER");
+        await maybeAutoRoute();
         const [[vol]] = await pool.query(
           "SELECT role vrole FROM VOLUNTEER WHERE volunteer_id=?", [u.pid]);
         needVolunteerRole(vol.vrole, "WASTE");
@@ -641,14 +822,22 @@ module.exports = async (req, res) => {
                   wr.route_type,
                   wp.partner_id,
                   wp.name      AS partner_name,
-                  wp.address   AS partner_address
+                  wp.address   AS partner_address,
+                  CASE WHEN hbd.drop_id IS NOT NULL THEN 'HUB_BIN' ELSE 'DONOR_SITE' END AS pickup_type,
+                  hb.hub_id,
+                  ch.name      AS hub_name,
+                  ch.address   AS hub_address,
+                  hb.label     AS bin_label
            FROM WASTE_ROUTING wr
            JOIN FOOD_LISTING l   ON l.listing_id  = wr.listing_id
            JOIN DONOR d          ON d.donor_id     = l.donor_id
            JOIN WASTE_PARTNER wp ON wp.partner_id  = wr.partner_id
+           LEFT JOIN HUB_BIN_DROP hbd ON hbd.waste_id = wr.waste_id
+           LEFT JOIN HUB_BIN hb      ON hb.bin_id = hbd.bin_id
+           LEFT JOIN COMMUNITY_HUB ch ON ch.hub_id = hb.hub_id
            WHERE wr.status = 'PENDING'
              AND wr.collection_id IS NULL
-           ORDER BY wr.waste_id`) || []);
+           ORDER BY pickup_type DESC, wr.waste_id`) || []);
       }
 
       // ── wasteSlots ────────────────────────────────────────────────────────────
@@ -718,6 +907,32 @@ module.exports = async (req, res) => {
             throw new Error("All waste_ids must belong to the same partner");
 
           const partnerId = rows[0].partner_id;
+
+          // Determine the pickup place: hub-bin items (joined via HUB_BIN_DROP) vs donor-site
+          // items. Hub-bin items must all belong to one hub and not be mixed with donor-site items.
+          const [pickupRows] = await conn.query(
+            `SELECT DISTINCT hbd.bin_id, hb.hub_id,
+                    CASE WHEN hbd.drop_id IS NOT NULL THEN 'HUB_BIN' ELSE 'DONOR_SITE' END AS pickup_type
+               FROM WASTE_ROUTING wr
+               LEFT JOIN HUB_BIN_DROP hbd ON hbd.waste_id = wr.waste_id
+               LEFT JOIN HUB_BIN hb ON hb.bin_id = hbd.bin_id
+              WHERE wr.waste_id IN (${placeholders})`,
+            waste_ids);
+          const types = new Set(pickupRows.map(r => r.pickup_type));
+          const hubIds = new Set(pickupRows.filter(r => r.hub_id !== null && r.hub_id !== undefined).map(r => r.hub_id));
+
+          let sourceType, hubId;
+          if (types.size === 1 && types.has("DONOR_SITE")) {
+            sourceType = "DONOR_SITE";
+            hubId = null;
+          } else if (types.size === 1 && types.has("HUB_BIN") && hubIds.size === 1) {
+            sourceType = "HUB";
+            hubId = [...hubIds][0];
+          } else {
+            await conn.rollback();
+            return res.status(400).json({ error: "Collect hub-bin items and donor-site items separately, one hub at a time" });
+          }
+
           const receiptRef = `RCPT-${partnerId}-${Date.now()}`;
 
           // WASTE_COLLECTION columns: collection_id, partner_id, slot_id, volunteer_id,
@@ -725,9 +940,9 @@ module.exports = async (req, res) => {
           const [cins] = await conn.query(
             `INSERT INTO WASTE_COLLECTION
               (partner_id, slot_id, volunteer_id, container_id,
-               source_type, vehicle_no, weighed_kg, receipt_ref)
-             VALUES (?, ?, ?, ?, 'DONOR_SITE', ?, ?, ?)`,
-            [partnerId, slot_id, u.pid, container_id, vehicle_no, weighed_kg, receiptRef]);
+               source_type, hub_id, vehicle_no, weighed_kg, receipt_ref)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [partnerId, slot_id, u.pid, container_id, sourceType, hubId, vehicle_no, weighed_kg, receiptRef]);
           const collectionId = cins.insertId;
 
           // Set collection_id and status='COMPLETED' together to satisfy check constraints

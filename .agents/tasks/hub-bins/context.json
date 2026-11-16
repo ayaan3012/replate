@@ -1,0 +1,30 @@
+{
+  "project_type": "Vercel serverless API (Node, CommonJS, mysql2) + Vite/React 18 (TypeScript) SPA, single repo. API in /api, frontend in /src.",
+  "language": "JavaScript (API, CommonJS) + TypeScript/TSX (frontend)",
+  "build_system": "Vite 5 + tsc for the frontend; npm scripts in package.json. `npm run build` = `tsc -p tsconfig.json && vite build` (TS type errors FAIL the build). No test runner; verification is build + node --check + the smoke/schema scripts.",
+  "test_framework": "none. `scripts/smoke.mjs` is an end-to-end smoke test (hits http://localhost:3000, needs a running dev server + DATABASE_URL). `scripts/schema-check.mjs` checks DB tables/views against an EXPECTED map (needs DATABASE_URL).",
+  "build_command": "npm run build",
+  "test_command": "node scripts/smoke.mjs  (needs dev server on :3000 + DATABASE_URL);  node scripts/schema-check.mjs  (needs DATABASE_URL)",
+  "verification_instructions": "1) `node --check <file>` for every changed JS/MJS file (syntax). 2) `npm run build` for any frontend/backend-type change (runs tsc then vite build; TS errors fail it). 3) `node scripts/schema-check.mjs` after DB/schema-related changes (needs DATABASE_URL). 4) `node scripts/smoke.mjs` for end-to-end (needs dev server on :3000 + DATABASE_URL). NOTE: smoke/schema need a live DB and (for smoke) a running API server; in a fresh worktree they may not be runnable, so build + node --check are the always-available gates.",
+  "snapshot_or_generated_files": null,
+  "environment_constraints": "Windows host, PowerShell. Never edit /sql, never read/print/commit .env, no secrets in code. Do not change tables or triggers; if a trigger fires, return e.sqlMessage as-is (do not work around it). All SQL parameterised (?). DECIMAL values arrive as strings — use Number()/n() in the UI. User-facing text must be escaped (TSX does this). The smoke/schema scripts load .env themselves; do not duplicate secrets.",
+  "contribution_requirements": "Project rules (rules.md / AGENTS.md): Vercel serverless API in /api (CommonJS, mysql2) on Aiven MySQL 8 (surplus_food_rescue). Never edit /sql. All SQL parameterised. Do not change tables/triggers; surface trigger messages via e.sqlMessage. Keep docs/API.md current for every endpoint (method, action, body, response fields). Run node --check on JS files you write and npm run build for the frontend. List every file created/edited.",
+  "key_patterns": "API files export a single async handler `module.exports = async (req,res) => { switch(req.query.a){...} }` with a top try/catch returning `errJson(e)`. Transactions use `pool.getConnection()` + `beginTransaction()` + `commit()`/`rollback()` + `release()`. Helper `q(s,p)=(await pool.query(s,p))[0]`; `need(role)` guards roles; `user(req)` reads the JWT cookie. Frontend uses `call<T>(file, action, body?)` (GET when body omitted, POST with JSON) and `n(v)` to coerce DECIMAL strings. Sections use `<section id=\"...\" className=\"scroll-mt-6 ...\">` with ids matching DashboardShell NAV anchors. Components: DashboardShell (sidebar+topbar), HubList (hub cards, exports hubAcceptingState/compartmentAcceptingState), HubMap (Leaflet), ToastContext for errors.",
+  "relevant_files": [
+    "api/hubs.js (modify: attachAvailableItems add bins)",
+    "api/data.js (modify: reportUnfit HUB_BIN, add unclaimed/routeUnclaimed/maybeAutoRoute, wasteJobs/collect)",
+    "src/lib/api.ts (modify: HubBin/Hub.bins/UnclaimedItem/ReportUnfitResponse/WasteJob types)",
+    "src/components/DashboardShell.tsx (modify: DONOR nav + AlertCircle import)",
+    "src/pages/Donor.tsx (modify: UnfitSection + NeedsDecisionSection + Overview stat + page root)",
+    "src/pages/Volunteer.tsx (modify: WasteRunsTab grouping)",
+    "src/pages/Hub.tsx (modify: add Waste bins card)",
+    "src/components/HubList.tsx (modify: Trash2 stat + import)",
+    "src/components/HubMap.tsx (modify: bin free kg in popup)",
+    "docs/API.md (modify: document new fields/actions)",
+    "scripts/smoke.mjs (modify: add section 5 Hub bin flow)",
+    "scripts/schema-check.mjs (modify: HUB_BIN/HUB_BIN_DROP + v_hub_bin_status view)",
+    "lib/util.js (study only: pool, errJson, user, n not here)",
+    "src/components/HubList.tsx (study: hubAcceptingState/compartmentAcceptingState helpers)"
+  ],
+  "directory_structure": "/api = serverless endpoints (hubs.js, data.js, auth.js, geo.js). /lib/util.js = shared pool/JWT/errJson/makeCode/geocode. /src = Vite React app: /lib/api.ts (call+n+types), /context (Auth/Toast), /components (DashboardShell, HubList, HubMap, ThemeToggle, AboutDialog), /pages (Home, Donor, Volunteer, Order, Hub). /docs/API.md = endpoint docs. /scripts = smoke.mjs + schema-check.mjs. /sql = DO NOT TOUCH."
+}

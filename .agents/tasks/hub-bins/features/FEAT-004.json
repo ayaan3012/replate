@@ -1,0 +1,23 @@
+{
+  "id": "FEAT-004",
+  "type": "feat",
+  "description": "Hub bin display: add a 'Waste bins' card to the /hub screen (per-bin label, Animal-feed/Biogas type badge, free-kg progress meter), show a 'N waste bin(s)' stat with a Trash2 icon on HubList cards, and show each bin's free kg in HubMap popups. Depends on FEAT-001 (Hub.bins on the Hub type + backend attaching bins). Files disjoint from other features.",
+  "status": "pending",
+  "steps": [
+    "src/pages/Hub.tsx: immediately after the compartment-grid block (after the `{selectedHub.available_items > 0 && (...)}` note, still inside the `{selectedHub && (...)}` guard), add a 'Waste bins at {selectedHub.name}' block. If `!selectedHub.bins || selectedHub.bins.length === 0` render `No waste bins at this hub`; otherwise render a responsive grid (e.g. `grid-cols-1 sm:grid-cols-2 gap-3`) with one card per bin: a row with the bin `label` (bold) and a type badge ('Animal feed' for bin_type 'ANIMAL', 'Biogas' for bin_type 'BIOGAS'), then a `free_kg / max_weight_kg` progress meter (`pct = max>0 ? min(100, free/max*100) : 0`) using `n(bin.free_kg)`/`n(bin.max_weight_kg)`, and a `<strong>{free.toFixed(1)}</strong> / {max.toFixed(1)} kg free` caption. Reuse the existing progress-meter markup style from the compartment grid.",
+    "src/components/HubList.tsx: add `Trash2` to the lucide-react import; in the stats row (inside the per-hub map), when `hub.bins && hub.bins.length > 0`, render a span `<Trash2 size={11} className='text-muted' /> <strong className='text-ink'>{hub.bins.length}</strong> waste bin{hub.bins.length !== 1 ? 's' : ''}` (place it after the available-items span).",
+    "src/components/HubMap.tsx: in each hub `Popup`, after the `available_items` block, when `hub.bins && hub.bins.length > 0` render a line listing each bin's free kg, e.g. `{hub.bins.map(b => \`${b.label}: ${n(b.free_kg).toFixed(1)} kg free\`).join(' · ')}`. `n` is already imported from @/lib/api."
+  ],
+  "acceptance_criteria": [
+    "`npm run build` passes (tsc + vite).",
+    "The /hub screen shows a 'Waste bins at <name>' card; hubs with no bins show 'No waste bins at this hub'; bins show label, an 'Animal feed'/'Biogas' badge, and a free-kg progress meter.",
+    "HubList cards show 'N waste bin(s)' with a Trash2 icon only for hubs that have bins.",
+    "HubMap popups show each bin's free kg for hubs that have bins.",
+    "No unused imports remain (Trash2 is used; remove it if a hub has no bins path is taken — but keep the import since it is used in the stats row)."
+  ],
+  "verification": [
+    "npm run build"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

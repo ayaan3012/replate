@@ -1,0 +1,7 @@
+{
+  "task_id": "task-hub-bins",
+  "task_description": "Implement hub waste bins (HUB_BIN/HUB_BIN_DROP/v_hub_bin_status) and a donor 'needs your decision' flow across the REPLATE surplus food rescue app: backend hubs/data endpoints, donor decision UI, volunteer collection grouping, hub bin display, docs and test harness. Do NOT touch /sql.",
+  "status": "pending",
+  "feature_order": ["FEAT-001", "FEAT-002", "FEAT-003", "FEAT-004", "FEAT-005"],
+  "blocked_reason": null
+}

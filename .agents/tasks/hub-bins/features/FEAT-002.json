@@ -1,0 +1,28 @@
+{
+  "id": "FEAT-002",
+  "type": "feat",
+  "description": "Donor decision-flow UI: extend the Unfit-food dialog with a grade + 'Where should it go?' (DONOR_SITE default / HUB_BIN with nearest-hub-bin selector) picker, add a new 'Needs your decision' section above My donations (driven by the new unclaimed/routeUnclaimed endpoints), surface the unclaimed count as a stat card in Overview, and add a 'Needs your decision' item to the DONOR sidebar. Depends on FEAT-001 (types + endpoints). Files are disjoint from FEAT-003/004/005.",
+  "status": "pending",
+  "steps": [
+    "src/components/DashboardShell.tsx: add `AlertCircle` to the lucide-react import list; insert `{ id:'needs-decision', label:'Needs your decision', icon:AlertCircle }` into the `NAV.DONOR` array immediately before the `{ id:'my-donations', ... }` entry. Do not change RECIPIENT/VOLUNTEER nav.",
+    "src/pages/Donor.tsx: add a `GradeDestinationPicker` sub-component (local to the file) that renders (a) the two grade radios ('Safe for animals' ANIMAL_OK / 'Only for biogas' BIOGAS_ONLY) and (b) a 'Where should it go?' radio group defaulting to 'A volunteer collects it from my address' (DONOR_SITE) vs 'Drop it at a hub bin' (HUB_BIN). When HUB_BIN is chosen and a `profile` with non-zero lat/lng is provided, it fetches `/api/hubs?a=nearest&lat=${n(profile.latitude)}&lng=${n(profile.longitude)}` once (cache in state), and for each returned hub renders only the bins matching the selected grade (ANIMAL_OK -> bin_type 'ANIMAL', BIOGAS_ONLY -> bin_type 'BIOGAS') as a radio line `Hub name - bin_label - X kg free` (free = n(bin.free_kg).toFixed(1)); bins where n(free_kg)===0 are disabled. It calls back with the selected `{grade, destination, bin_id|null}` (controlled via props/onChange). If profile coords are 0/0 and HUB_BIN chosen, show a toast 'Add an address to your profile to use hub bins' and disable submit.",
+    "src/pages/Donor.tsx UnfitSection: accept a `profile: DonorProfile | null` prop (pass it from the page root, which already loads profile); render the GradeDestinationPicker after the existing grade fieldset (replace the standalone grade radios with the picker so grade is chosen once); on submit include `destination` and `bin_id` (bin_id only when destination==='HUB_BIN') in the reportUnfit body; in the ConfirmationCard rows, when the response `destination==='HUB_BIN'`, add a row 'Drop at' = `Please place the food in the ${result.bin_label} at ${result.hub_name}, ${result.hub_address}`. Keep the existing category/name/qty/unit/weight fields and the ConfirmationCard-on-success behaviour.",
+    "src/pages/Donor.tsx: add a `NeedsDecisionSection({profile, onRefresh})` component that calls `/api/data?a=unclaimed` on mount and after each action (via a `reload` callback). It renders `<section id='needs-decision' className='scroll-mt-6 mb-14'>` only when the list is non-empty, with heading 'Needs your decision'. Each row shows: `food_name` (bold), `${n(kg_left)} kg`, a countdown (`minutes_left < 0 ? 'Expired' : \`${Math.floor(m/60)}h ${m%60}m left\``), the note 'If you do not choose, we send it to a partner automatically after it expires', a GradeDestinationPicker, and a 'Route this food' button that POSTs `/api/data?a=routeUnclaimed` with `{listing_id, grade, destination, bin_id}`; on success show a ConfirmationCard (same rows as Unfit, including the HUB_BIN 'Drop at' line) and call onRefresh()/reload(). Errors via toast.",
+    "src/pages/Donor.tsx page root: add `unclaimed` state loaded once (and reloaded via a `reloadUnclaimed` callback) using `call<UnclaimedItem[]>('data','unclaimed')`; pass `unclaimedCount={unclaimed?.length ?? 0}` to `OverviewSection`; render `<OverviewSection listings={listings} unclaimedCount={unclaimedCount} />`, then the existing Donate/Unfit sections, then `<NeedsDecisionSection profile={profile} onRefresh={reloadUnclaimed} />` immediately before `<MyDonationsSection .../>`. Wire the Needs-decision and Unfit onRefresh to also call reloadUnclaimed.",
+    "src/pages/Donor.tsx OverviewSection: add a `unclaimedCount:number` prop and render an extra stat card (AlertCircle icon, amber color) with value `unclaimedCount` and label 'Needs your decision', appended after the existing listing-count cards. Import `AlertCircle` from lucide-react in Donor.tsx if not already imported."
+  ],
+  "acceptance_criteria": [
+    "`npm run build` passes (tsc + vite).",
+    "The DONOR sidebar shows 'Needs your decision' (AlertCircle) immediately above 'My donations'; other roles' nav is unchanged.",
+    "The Unfit-food dialog offers 'A volunteer collects it from my address' (default) and 'Drop it at a hub bin'; choosing HUB_BIN shows the nearest hubs' matching bins as a radio list with free kg, disabling full bins.",
+    "Reporting unfit food with HUB_BIN submits destination+bin_id and the confirmation card shows 'Please place the food in the <bin_label> at <hub_name>, <hub_address>'.",
+    "A 'Needs your decision' section appears above 'My donations' only when the donor has unclaimed listings; each row shows food, kg, countdown, the auto-route note, grade + destination picker, and a 'Route this food' button that calls routeUnclaimed.",
+    "The Overview shows a 'Needs your decision' stat card whose value equals the number of unclaimed items.",
+    "No unused imports remain (e.g. remove GradeDestinationPicker duplicates, don't leave orphaned grade radios)."
+  ],
+  "verification": [
+    "npm run build"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

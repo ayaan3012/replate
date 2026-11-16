@@ -64,9 +64,30 @@ const attachAvailableItems = async (hubs) => {
   );
   const logMap = new Map(logs.map(l => [l.hub_id, l.last_checkin]));
 
+  // bins per hub (from v_hub_bin_status); DECIMAL max_weight_kg/free_kg stay as strings
+  const [binRows] = await pool.query(
+    `SELECT bin_id, hub_id, bin_type, label, max_weight_kg, free_kg
+       FROM v_hub_bin_status
+      WHERE hub_id IN (${ph})`,
+    ids
+  );
+  const binMap = new Map();
+  for (const r of binRows) {
+    const arr = binMap.get(r.hub_id) || [];
+    arr.push({
+      bin_id: r.bin_id,
+      bin_type: r.bin_type,
+      label: r.label,
+      max_weight_kg: r.max_weight_kg,
+      free_kg: r.free_kg
+    });
+    binMap.set(r.hub_id, arr);
+  }
+
   for (const h of hubs) {
     h.available_items = cntMap.get(h.hub_id) || 0;
     h.last_checkin    = logMap.get(h.hub_id) || null;
+    h.bins            = binMap.get(h.hub_id) || [];
   }
   return hubs;
 };

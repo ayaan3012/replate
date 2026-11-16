@@ -1,0 +1,30 @@
+{
+  "id": "FEAT-005",
+  "type": "docs",
+  "description": "Docs + test harness: document all new/changed endpoints in docs/API.md, add a '5. Hub bin flow' end-to-end section to scripts/smoke.mjs (reportUnfit HUB_BIN -> wasteJobs HUB_BIN -> collect -> hubs list bin free_kg), and add HUB_BIN/HUB_BIN_DROP tables plus the v_hub_bin_status view to scripts/schema-check.mjs. Depends on FEAT-001 (backend must exist for smoke/schema to pass); docs can be written any time after FEAT-001. Files disjoint from other features.",
+  "status": "pending",
+  "steps": [
+    "docs/API.md: under hubs §1 (list) and §2 (nearest), document a `bins` array on each hub: `[{ bin_id:number, bin_type:'ANIMAL'|'BIOGAS', label:string, max_weight_kg:string, free_kg:string }]` (DECIMAL strings; empty array when the hub has none). Note existing fields are unchanged.",
+    "docs/API.md §5 reportUnfit: add optional request body fields `destination` ('DONOR_SITE' default | 'HUB_BIN') and `bin_id` (number, required when destination='HUB_BIN'); document the bin-type pre-check (ANIMAL_OK->ANIMAL, BIOGAS_ONLY->BIOGAS) returning 400 'This bin does not accept <grade> food', and that the HUB_BIN_DROP insert trigger may also return e.sqlMessage. Response: default gains `destination:'DONOR_SITE'`; HUB_BIN returns `{partner_name, route_type, kg, destination:'HUB_BIN', hub_name, hub_address, bin_label}`.",
+    "docs/API.md: add two new DONOR sections (after reportUnfit or in the donor group) — `unclaimed` (GET, a=unclaimed, returns array of `{listing_id, food_name, quantity_remaining, quantity_unit, kg_left, expires_at, minutes_left}`; listings status AVAILABLE, quantity_remaining>0, hub_id NULL, expires_at <= NOW()+INTERVAL 2 HOUR) and `routeUnclaimed` (POST, a=routeUnclaimed, body `{listing_id, grade, destination, bin_id?}`, same transaction + HUB_BIN logic as reportUnfit applied to an existing AVAILABLE non-hub listing; returns the same shape as reportUnfit). Note `myListings` and `wasteJobs` now auto-call `sp_route_expired_food()` at most once per 10 minutes.",
+    "docs/API.md §17 wasteJobs: add response fields `pickup_type` ('HUB_BIN'|'DONOR_SITE') and, for HUB_BIN rows, `hub_id`, `hub_name`, `hub_address`, `bin_label`.",
+    "docs/API.md §20 collect: document that the request must be a single pickup place — all DONOR_SITE (source_type='DONOR_SITE', hub_id NULL) or all HUB_BIN from one hub (source_type='HUB', hub_id set); mixed or multi-hub returns 400 'Collect hub-bin items and donor-site items separately, one hub at a time'. Keep the existing body/return fields.",
+    "scripts/smoke.mjs: after the '4. Waste flow' section add a '5. Hub bin flow' section. Step 1: GET /api/hubs?a=list; find the first hub with status 'ACTIVE' and a non-empty `bins` array containing a bin with `n(free_kg) > 0`; if none, print `skipped - no hub bins in DB` and pass through (skip the rest). Step 2: pick such a bin; derive grade from `bin_type` (ANIMAL->ANIMAL_OK, BIOGAS->BIOGAS_ONLY); POST /api/data?a=reportUnfit with `{category_id: categoryId, food_name:'Smoke Hub Bin ...', qty:2, unit:'kg', weight:0.5, grade, destination:'HUB_BIN', bin_id}`; assert status 200, `body.destination==='HUB_BIN'`, and `hub_name`+`bin_label` present. Step 3: GET /api/data?a=wasteJobs (volunteer); assert an item exists with `pickup_type==='HUB_BIN'` and `hub_id===<the hub's id>`; capture its `waste_id`. Step 4: POST /api/data?a=collect with that single waste_id (reuse a wasteSlotId + containerId from section 4; if missing, fail with a clear skip message) and assert `body.ok===1`. Step 5: GET /api/hubs?a=list; find the hub/bin; assert the bin's `free_kg` is numeric (isNumeric). Use the existing `check/fail/pass` helpers and `isNumeric`. Keep section 4's shared `categoryId/wasteSlotId/containerId` in scope (declare with `let` at the top of section 4 if needed so section 5 can read them).",
+    "scripts/schema-check.mjs: add to the `EXPECTED` object `HUB_BIN: ['bin_id','hub_id','bin_type','label','max_weight_kg']` and `HUB_BIN_DROP: ['drop_id','bin_id','waste_id','dropped_at']`. Before the existing `await conn.end()`, also query `const [viewRows] = await conn.query('SELECT TABLE_NAME FROM information_schema.VIEWS WHERE TABLE_SCHEMA = ?', [dbName])` and build `const views = new Set(viewRows.map(r => String(r.TABLE_NAME).toLowerCase()))`. After the tables loop (where `missingCount` is tallied), add: `if (!views.has('v_hub_bin_status')) { console.log('MISSING  view  v_hub_bin_status'); missingCount++; }`. Leave the existing OK/exit logic intact."
+  ],
+  "acceptance_criteria": [
+    "`node --check scripts/smoke.mjs` exits 0.",
+    "`node --check scripts/schema-check.mjs` exits 0.",
+    "docs/API.md documents bins[] on hubs list/nearest, destination+bin_id and HUB_BIN response on reportUnfit, the new unclaimed and routeUnclaimed actions, wasteJobs pickup_type/hub fields, and collect's mixed-hub error + source_type='HUB'/hub_id behaviour.",
+    "scripts/schema-check.mjs reports HUB_BIN/HUB_BIN_DROP columns and the v_hub_bin_status view (prints OK only when all present).",
+    "scripts/smoke.mjs section 5 passes end-to-end when a hub bin exists, and prints 'skipped - no hub bins in DB' (passing) when none do."
+  ],
+  "verification": [
+    "node --check scripts/smoke.mjs",
+    "node --check scripts/schema-check.mjs",
+    "node scripts/schema-check.mjs  (needs DATABASE_URL)",
+    "node scripts/smoke.mjs  (needs dev server on :3000 + DATABASE_URL)"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}

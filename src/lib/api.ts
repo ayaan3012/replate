@@ -116,6 +116,21 @@ export interface ReportUnfitResponse {
   partner_name: string;
   route_type:   string;
   kg:           string | number;
+  destination:  "DONOR_SITE" | "HUB_BIN";
+  hub_name?:    string;     // HUB_BIN only
+  hub_address?: string;     // HUB_BIN only
+  bin_label?:   string;     // HUB_BIN only
+}
+
+// /api/data?a=unclaimed — donor listings expiring within 2h (incl. already expired)
+export interface UnclaimedItem {
+  listing_id:         number;
+  food_name:          string;
+  quantity_remaining: string | number;   // DECIMAL arrives as string
+  quantity_unit:      string;
+  kg_left:            string | number;     // DECIMAL arrives as string
+  expires_at:         string;
+  minutes_left:       string | number;    // can be negative when expired
 }
 
 // ─── /api/data — recipient ───────────────────────────────────────────────────
@@ -209,6 +224,11 @@ export interface WasteJob {
   partner_id:      number;
   partner_name:    string;
   partner_address: string;
+  pickup_type:     "HUB_BIN" | "DONOR_SITE";   // HUB_BIN = dropped at a hub bin
+  hub_id?:         number | null;   // HUB_BIN only
+  hub_name?:       string | null;   // HUB_BIN only
+  hub_address?:    string | null;   // HUB_BIN only
+  bin_label?:      string | null;   // HUB_BIN only
 }
 
 export interface WasteSlot {
@@ -258,6 +278,14 @@ export interface Compartment {
   accepting:      number;    // 0 | 1
 }
 
+export interface HubBin {
+  bin_id:        number;
+  bin_type:      "ANIMAL" | "BIOGAS";
+  label:         string;
+  max_weight_kg: string | number;   // DECIMAL arrives as string
+  free_kg:       string | number;   // DECIMAL arrives as string
+}
+
 export interface Hub {
   hub_id:          number;
   name:            string;
@@ -269,6 +297,7 @@ export interface Hub {
   distance_km?:    string | number;
   available_items: number;
   last_checkin?:   string | null;   // ISO timestamp from HUB_LOG, null if never checked in
+  bins?:           HubBin[];        // waste bins at this hub (empty array when none)
   compartments:    Compartment[];
 }
 

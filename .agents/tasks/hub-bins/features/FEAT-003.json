@@ -1,0 +1,25 @@
+{
+  "id": "FEAT-003",
+  "type": "feat",
+  "description": "Volunteer waste-runs UI: group the waste jobs by pickup place instead of by partner — HUB_BIN items grouped per hub with header 'Collect from <hub_name> - <bin_label>', DONOR_SITE items grouped under 'Donor addresses' — while keeping the existing per-routing checkboxes and the single-partner selection constraint. The mixed-hub error is enforced by the backend (FEAT-001) and surfaced as a toast. Depends on FEAT-001 (WasteJob.pickup_type + hub fields). File disjoint from other features.",
+  "status": "pending",
+  "steps": [
+    "src/pages/Volunteer.tsx: replace the `groupByPartner(jobs)` function with a `groupByPickup(jobs)` that returns groups in this order: first HUB_BIN groups keyed by hub_id (header `Collect from ${job.hub_name} - ${job.bin_label}`), then a single DONOR_SITE group (header 'Donor addresses', key e.g. 'donor-site'). Each group object should carry an `id` (string, e.g. `hub:${hub_id}` or `donor-site`) and the list of jobs. HUB_BIN jobs have hub_id/hub_name/bin_label from the extended WasteJob type (FEAT-001); DONOR_SITE jobs have null hub fields.",
+    "src/pages/Volunteer.tsx WasteRunsTab: render `const groups = groupByPickup(wasteJobs ?? [])`. For each group render a bordered card with the group header and per-job checkboxes exactly as today (food_name, `n(quantity_kg)` kg, grade), but since groups are no longer per-partner, also show the `partner_name` on each job row (small text) so the volunteer still sees who the routing is for.",
+    "src/pages/Volunteer.tsx: keep the single-partner constraint — leave the `toggleItem`/`activePartner` logic unchanged so selecting across partners still clears the previous selection. The collect form header should derive the partner name from the selected jobs: `const partnerName = wasteJobs?.find(j => selected.has(j.waste_id))?.partner_name ?? ''` (replace the `selectedGroup` partner lookup, since groups are no longer partner-based). Keep the slot/container/vehicle/weighed_kg form and the submit handler.",
+    "src/pages/Volunteer.tsx: on `handleCollect` error, the existing `catch` already toasts `err.message` — ensure the backend 'Collect hub-bin items and donor-site items separately, one hub at a time' message shows as a toast (it already will via the thrown Error). The receipt ConfirmationCard after a successful collect is unchanged.",
+    "Ensure no unused imports/vars remain (e.g. remove the now-unused `WasteGroup`/`groupByPartner` if fully replaced, or repurpose `WasteGroup` to the new shape)."
+  ],
+  "acceptance_criteria": [
+    "`npm run build` passes (tsc + vite).",
+    "Waste runs groups HUB_BIN jobs under a header 'Collect from <hub_name> - <bin_label>' (one group per hub), and DONOR_SITE jobs under 'Donor addresses'.",
+    "Selecting jobs still enforces the single-partner constraint (selecting a job from a different partner clears the prior selection).",
+    "Submitting a collect of a single HUB_BIN item succeeds and shows the receipt card; submitting a mixed HUB_BIN+DONOR_SITE (or two-hub) selection surfaces the backend's 'Collect hub-bin items and donor-site items separately, one hub at a time' error as a toast.",
+    "No unused imports or variables remain."
+  ],
+  "verification": [
+    "npm run build"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
