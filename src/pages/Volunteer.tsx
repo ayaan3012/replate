@@ -592,28 +592,33 @@ const ROUTE_TYPE_STYLE: Record<string, string> = {
 };
 
 interface WasteGroup {
-  partner_id:      number;
-  partner_name:    string;
-  partner_address: string;
-  route_type:      string;
-  jobs:            WasteJob[];
+  id:     string;           // 'hub:<hub_id>' or 'donor-site'
+  header: string;           // 'Collect from <hub_name> · <bin_label>' or 'Donor addresses'
+  jobs:   WasteJob[];
 }
 
-function groupByPartner(jobs: WasteJob[]): WasteGroup[] {
-  const map = new Map<number, WasteGroup>();
+function groupByPickup(jobs: WasteJob[]): WasteGroup[] {
+  const hubMap = new Map<number, WasteGroup>();
+  const donorGroup: WasteGroup = { id: 'donor-site', header: 'Donor addresses', jobs: [] };
+
   for (const job of jobs) {
-    if (!map.has(job.partner_id)) {
-      map.set(job.partner_id, {
-        partner_id:      job.partner_id,
-        partner_name:    job.partner_name,
-        partner_address: job.partner_address,
-        route_type:      job.route_type,
-        jobs:            [],
-      });
+    if (job.pickup_type === 'HUB_BIN' && job.hub_id != null) {
+      if (!hubMap.has(job.hub_id)) {
+        hubMap.set(job.hub_id, {
+          id:     `hub:${job.hub_id}`,
+          header: `Collect from ${job.hub_name ?? ''} · ${job.bin_label ?? ''}`,
+          jobs:   [],
+        });
+      }
+      hubMap.get(job.hub_id)!.jobs.push(job);
+    } else {
+      donorGroup.jobs.push(job);
     }
-    map.get(job.partner_id)!.jobs.push(job);
   }
-  return [...map.values()];
+
+  const result = [...hubMap.values()];
+  if (donorGroup.jobs.length > 0) result.push(donorGroup);
+  return result;
 }
 
 interface ReceiptState {
@@ -758,29 +763,25 @@ function WasteRunsTab() {
     );
   }
 
-  const groups = groupByPartner(wasteJobs ?? []);
-  const selectedGroup = groups.find(g => g.partner_id === activePartner) ?? null;
+  const groups = groupByPickup(wasteJobs ?? []);
+  const partnerName = wasteJobs?.find(j => selected.has(j.waste_id))?.partner_name ?? '';
 
   return (
     <div className="flex flex-col gap-8">
-      {/* Partner groups */}
+      {/* Pickup groups */}
       {groups.length === 0 ? (
         <EmptyState message="No waste jobs available right now." />
       ) : (
         <div className="flex flex-col gap-6">
-          {groups.map(g => {
-            const rtStyle = ROUTE_TYPE_STYLE[g.route_type] ?? "bg-border text-muted";
-            return (
-              <div key={g.partner_id} className="rounded-lg border border-border bg-card p-4 shadow-sm">
-                <div className="flex items-center gap-2 mb-3 flex-wrap">
-                  <p className="font-bold text-ink text-sm">{g.partner_name}</p>
-                  <span className={`text-xs font-semibold rounded-full px-2 py-0.5 ${rtStyle}`}>
-                    {g.route_type.replace(/_/g, " ")}
-                  </span>
-                  <span className="text-xs text-muted">{g.partner_address}</span>
-                </div>
-                <div className="flex flex-col gap-2">
-                  {g.jobs.map(job => (
+          {groups.map(g => (
+            <div key={g.id} className="rounded-lg border border-border bg-card p-4 shadow-sm">
+              <div className="flex items-center gap-2 mb-3 flex-wrap">
+                <p className="font-bold text-ink text-sm">{g.header}</p>
+              </div>
+              <div className="flex flex-col gap-2">
+                {g.jobs.map(job => {
+                  const rtStyle = ROUTE_TYPE_STYLE[job.route_type] ?? "bg-border text-muted";
+                  return (
                     <label
                       key={job.waste_id}
                       className="flex items-center gap-3 cursor-pointer rounded p-2 hover:bg-border transition-colors"
@@ -796,21 +797,25 @@ function WasteRunsTab() {
                         <span className="block text-xs text-muted">
                           {n(job.quantity_kg).toFixed(2)} kg · Grade: {job.condition_grade}
                         </span>
+                        <span className="block text-xs text-muted">{job.partner_name}</span>
+                        <span className={`inline-block mt-0.5 text-xs font-semibold rounded-full px-2 py-0.5 ${rtStyle}`}>
+                          {job.route_type.replace(/_/g, " ")}
+                        </span>
                       </span>
                     </label>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
-            );
-          })}
+            </div>
+          ))}
         </div>
       )}
 
       {/* Collection form — shown when items are selected */}
-      {selected.size > 0 && selectedGroup && (
+      {selected.size > 0 && (
         <div className="rounded-xl border border-pink bg-pink-tint/30 p-5">
           <p className="text-sm font-bold text-ink mb-4">
-            Collecting {selected.size} routing{selected.size !== 1 ? "s" : ""} from {selectedGroup.partner_name}
+            Collecting {selected.size} routing{selected.size !== 1 ? 's' : ''} — {partnerName}
           </p>
           <form onSubmit={handleCollect} className="flex flex-col gap-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
