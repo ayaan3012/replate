@@ -6,7 +6,7 @@
  *   selectedHubId — highlights the selected card
  *   onSelect      — called when a card is clicked
  */
-import { Thermometer, Wind, Package, CheckCircle, XCircle, AlertCircle } from "lucide-react";
+import { Thermometer, Wind, Package, CheckCircle, XCircle, AlertCircle, Trash2 } from "lucide-react";
 import { n, type Hub } from "@/lib/api";
 
 // ─── 3-state accepting badge helper ──────────────────────────────────────────
@@ -142,6 +142,14 @@ export default function HubList({ hubs, selectedHubId, onSelect }: Props) {
                   <span className="flex items-center gap-1">
                     <Package size={11} className="text-pink" />
                     <strong className="text-ink">{hub.available_items}</strong> item{hub.available_items !== 1 ? "s" : ""} available
+                  </span>
+                )}
+
+                {/* Waste bins */}
+                {hub.bins && hub.bins.length > 0 && (
+                  <span className="flex items-center gap-1">
+                    <Trash2 size={11} className="text-muted" />
+                    {hub.bins.length} waste bin{hub.bins.length !== 1 ? "s" : ""}
                   </span>
                 )}
 

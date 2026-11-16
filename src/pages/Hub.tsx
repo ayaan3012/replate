@@ -220,6 +220,42 @@ export default function HubPage() {
         </div>
       )}
 
+      {/* Waste bins */}
+      {selectedHub && selectedHub.bins && (
+        <div className="mb-8">
+          <p className="text-sm font-semibold text-ink mb-3">Waste bins at {selectedHub.name}</p>
+          {selectedHub.bins.length === 0 ? (
+            <p className="text-sm text-muted">No waste bins at this hub.</p>
+          ) : (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+              {selectedHub.bins.map(bin => {
+                const freeKg = Number(bin.free_kg);
+                const maxKg  = Number(bin.max_weight_kg);
+                const pct    = maxKg > 0 ? Math.min(100, (freeKg / maxKg) * 100) : 0;
+                return (
+                  <div key={bin.bin_id} className="rounded-lg border border-border bg-card p-3 shadow-sm">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="font-bold text-sm text-ink">{bin.label}</span>
+                      <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
+                        bin.bin_type === 'ANIMAL' ? 'bg-success-tint text-success' : 'bg-blue-tint text-blue'
+                      }`}>
+                        {bin.bin_type === 'ANIMAL' ? 'Animal feed' : 'Biogas'}
+                      </span>
+                    </div>
+                    <div className="w-full bg-border rounded-full h-2 mb-1 overflow-hidden">
+                      <div className="h-2 rounded-full bg-primary transition-all" style={{ width: `${pct}%` }} />
+                    </div>
+                    <p className="text-xs text-muted">
+                      <strong className="text-ink">{freeKg.toFixed(1)}</strong> / {maxKg.toFixed(1)} kg free
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Keypad panel */}
       <div className="rounded-2xl border-2 border-border bg-card p-6 shadow-md">
         <p className="text-sm font-bold text-ink mb-4 text-center">Enter your code</p>

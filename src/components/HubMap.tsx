@@ -124,6 +124,16 @@ export default function HubMap({ hubs, userLocation, selectedHubId, onSelect }: 
               {hub.available_items > 0 && (
                 <><br />{hub.available_items} item{hub.available_items !== 1 ? "s" : ""} available</>
               )}
+              {hub.bins && hub.bins.length > 0 && (
+                <>
+                  <br />
+                  {hub.bins.map(b => (
+                    <span key={b.bin_id} style={{ display: 'block', fontSize: 11 }}>
+                      {b.label}: {n(b.free_kg).toFixed(1)} kg free
+                    </span>
+                  ))}
+                </>
+              )}
             </Popup>
           </Marker>
         );
