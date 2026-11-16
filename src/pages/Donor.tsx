@@ -573,7 +573,7 @@ function GradeDestinationPicker({ value, onChange, profile }: GradeDestinationPi
 
 // ─── Section 1: Overview ──────────────────────────────────────────────────────
 
-function OverviewSection({ listings }: { listings: Listing[] | null }) {
+function OverviewSection({ listings, unclaimedCount }: { listings: Listing[] | null; unclaimedCount: number }) {
   const [impact,  setImpact]  = useState<DonorImpact | null>(null);
   const [loading, setLoading] = useState(true);
   const { toast } = useToast();
@@ -619,6 +619,12 @@ function OverviewSection({ listings }: { listings: Listing[] | null }) {
           <p className="text-2xl font-bold text-ink">{listings === null ? "—" : total}</p>
           <p className="text-xs text-muted mt-0.5">Total listings</p>
         </div>
+        {unclaimedCount > 0 && (
+          <div className="rounded-lg border-2 border-accent bg-accent-tint p-5 shadow-sm">
+            <p className="text-2xl font-bold text-ink">{unclaimedCount}</p>
+            <p className="text-xs text-muted mt-0.5">Needs your decision</p>
+          </div>
+        )}
       </div>
     </SectionWrap>
   );
@@ -951,32 +957,42 @@ function DonateDeliverySection({ categories, tags, onRefresh }: DonateDeliverySe
 
 interface UnfitSectionProps {
   categories: Category[];
+  profile:    DonorProfile | null;
   onRefresh:  () => void;
 }
 
-function UnfitSection({ categories, onRefresh }: UnfitSectionProps) {
+function UnfitSection({ categories, profile, onRefresh }: UnfitSectionProps) {
   const [open,      setOpen]      = useState(false);
   const [busy,      setBusy]      = useState(false);
   const [result,    setResult]    = useState<ReportUnfitResponse | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [picker,    setPicker]    = useState<GradeDestinationValue>({
+    grade: "ANIMAL_OK", destination: "DONOR_SITE", bin_id: null,
+  });
   const { toast } = useToast();
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setFormError(null);
+    if (picker.destination === "HUB_BIN" && !picker.bin_id) {
+      setFormError("Select a hub bin or choose volunteer collection"); return;
+    }
     const fd  = new FormData(e.currentTarget);
     const get = (k: string) => fd.get(k) as string;
     setBusy(true);
     setResult(null);
     try {
-      const res = await call<ReportUnfitResponse>("data", "reportUnfit", {
+      const body: Record<string, unknown> = {
         category_id: Number(get("category_id")),
         food_name:   get("food_name"),
         qty:         Number(get("qty")),
         unit:        get("unit"),
         weight:      Number(get("weight")),
-        grade:       get("grade"),
-      });
+        grade:       picker.grade,
+        destination: picker.destination,
+      };
+      if (picker.destination === "HUB_BIN") body.bin_id = picker.bin_id;
+      const res = await call<ReportUnfitResponse>("data", "reportUnfit", body);
       setResult(res);
       onRefresh();
     } catch (err) {
@@ -1011,6 +1027,9 @@ function UnfitSection({ categories, onRefresh }: UnfitSectionProps) {
               { label: "Partner",    value: result.partner_name },
               { label: "Route type", value: result.route_type },
               { label: "Weight",     value: `${n(result.kg).toFixed(2)} kg` },
+              ...(result.destination === "HUB_BIN" && result.hub_name
+                ? [{ label: "Drop at", value: `Please place the food in the ${result.bin_label} at ${result.hub_name}, ${result.hub_address}` }]
+                : []),
             ]}
             buttonLabel="Done"
             onClose={handleClose}
@@ -1043,29 +1062,7 @@ function UnfitSection({ categories, onRefresh }: UnfitSectionProps) {
               </Field>
             </div>
 
-            <fieldset className="border border-border rounded-lg p-3">
-              <legend className="text-xs font-semibold text-ink px-1">Condition</legend>
-              <div className="flex flex-col gap-2 mt-1">
-                {[
-                  { value: "ANIMAL_OK",   label: "Safe for animals (ANIMAL_OK)",  desc: "Goes to farms or animal shelters" },
-                  { value: "BIOGAS_ONLY", label: "Only for biogas (BIOGAS_ONLY)",  desc: "Not safe for animals either" },
-                ].map(opt => (
-                  <label key={opt.value} className="flex items-start gap-2 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="grade"
-                      value={opt.value}
-                      defaultChecked={opt.value === "ANIMAL_OK"}
-                      className="mt-0.5 accent-[var(--color-pink)]"
-                    />
-                    <span>
-                      <span className="block text-sm font-semibold text-ink">{opt.label}</span>
-                      <span className="block text-xs text-muted">{opt.desc}</span>
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </fieldset>
+            <GradeDestinationPicker value={picker} onChange={setPicker} profile={profile} />
 
             {formError && (
               <p role="alert" className="text-xs text-error bg-error-tint rounded px-3 py-2">
@@ -1078,6 +1075,127 @@ function UnfitSection({ categories, onRefresh }: UnfitSectionProps) {
         </Dialog>
       )}
     </SectionWrap>
+  );
+}
+
+// ─── Section 4b: Needs your decision ─────────────────────────────────────────
+
+interface NeedsDecisionSectionProps {
+  items:     UnclaimedItem[];
+  profile:   DonorProfile | null;
+  onRefresh: () => void;
+}
+
+function NeedsDecisionSection({ items, profile, onRefresh }: NeedsDecisionSectionProps) {
+  if (!items.length) return null;
+  const { toast } = useToast();
+
+  return (
+    <SectionWrap id="needs-decision" title="Needs your decision">
+      <p className="text-sm text-muted mb-5">
+        These listings are expiring soon and have no orders. If you don't choose, we send them to a partner automatically after they expire.
+      </p>
+      <div className="flex flex-col gap-5">
+        {items.map(item => (
+          <NeedsDecisionRow
+            key={item.listing_id}
+            item={item}
+            profile={profile}
+            onRefresh={onRefresh}
+          />
+        ))}
+      </div>
+    </SectionWrap>
+  );
+}
+
+function NeedsDecisionRow({ item, profile, onRefresh }: {
+  item:      UnclaimedItem;
+  profile:   DonorProfile | null;
+  onRefresh: () => void;
+}) {
+  const [picker, setPicker] = useState<GradeDestinationValue>({
+    grade: "ANIMAL_OK", destination: "DONOR_SITE", bin_id: null,
+  });
+  const [busy,   setBusy]   = useState(false);
+  const [result, setResult] = useState<ReportUnfitResponse | null>(null);
+  const { toast } = useToast();
+
+  const minLeft = Number(item.minutes_left);
+  const countdown = minLeft < 0
+    ? "Expired"
+    : minLeft < 60
+      ? `${minLeft}m left`
+      : `${Math.floor(minLeft / 60)}h ${minLeft % 60}m left`;
+
+  const handleRoute = async () => {
+    if (picker.destination === "HUB_BIN" && !picker.bin_id) {
+      toast("Select a hub bin"); return;
+    }
+    setBusy(true);
+    try {
+      const body: Record<string, unknown> = {
+        listing_id:  item.listing_id,
+        grade:       picker.grade,
+        destination: picker.destination,
+      };
+      if (picker.destination === "HUB_BIN") body.bin_id = picker.bin_id;
+      const res = await call<ReportUnfitResponse>("data", "routeUnclaimed", body);
+      setResult(res);
+      onRefresh();
+    } catch (err) {
+      toast(err instanceof Error ? err.message : "Could not route food");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (result) {
+    return (
+      <ConfirmationCard
+        heading="Food routed"
+        rows={[
+          { label: "Partner",    value: result.partner_name },
+          { label: "Route type", value: result.route_type },
+          { label: "Weight",     value: `${n(result.kg).toFixed(2)} kg` },
+          ...(result.destination === "HUB_BIN" && result.hub_name
+            ? [{ label: "Drop at", value: `Please place the food in the ${result.bin_label} at ${result.hub_name}, ${result.hub_address}` }]
+            : []),
+        ]}
+        buttonLabel="Done"
+        onClose={() => setResult(null)}
+      />
+    );
+  }
+
+  return (
+    <div className="rounded-xl border-2 border-accent bg-accent-tint p-5">
+      <div className="flex items-start justify-between gap-3 mb-3">
+        <div>
+          <p className="font-bold text-sm text-ink">{item.food_name}</p>
+          <p className="text-xs text-muted mt-0.5">
+            {n(item.kg_left).toFixed(1)} kg · {n(item.quantity_remaining)} {item.quantity_unit} left
+          </p>
+        </div>
+        <span className={`shrink-0 text-xs font-semibold px-2 py-0.5 rounded-full ${
+          minLeft < 0 ? "bg-error-tint text-error" : "bg-border text-muted"
+        }`}>
+          {countdown}
+        </span>
+      </div>
+      <p className="text-xs text-muted mb-4 italic">
+        If you don't choose, we send it to a partner automatically after it expires.
+      </p>
+      <GradeDestinationPicker value={picker} onChange={setPicker} profile={profile} />
+      <button
+        onClick={handleRoute}
+        disabled={busy}
+        className="mt-4 w-full py-2.5 rounded-lg bg-pink text-white text-sm font-bold shadow-glow-pink hover:brightness-110 disabled:opacity-50 transition-all flex items-center justify-center gap-2"
+      >
+        {busy && <Loader2 size={14} className="animate-spin" />}
+        {busy ? "Routing…" : "Route this food"}
+      </button>
+    </div>
   );
 }
 
@@ -1236,15 +1354,15 @@ function MyDonationsSection({ listings, routings, loading }: {
 
 export default function Donor() {
   const { toast } = useToast();
-  // useAuth is imported but role guard is in the router; keep import for consistency
   void useAuth;
 
-  const [profile,     setProfile]     = useState<DonorProfile | null>(null);
-  const [categories,  setCategories]  = useState<Category[]>([]);
-  const [tags,        setTags]        = useState<Tag[]>([]);
-  const [listings,    setListings]    = useState<Listing[] | null>(null);
-  const [routings,    setRoutings]    = useState<Routing[] | null>(null);
-  const [dataLoading, setDataLoading] = useState(true);
+  const [profile,       setProfile]       = useState<DonorProfile | null>(null);
+  const [categories,    setCategories]    = useState<Category[]>([]);
+  const [tags,          setTags]          = useState<Tag[]>([]);
+  const [listings,      setListings]      = useState<Listing[] | null>(null);
+  const [routings,      setRoutings]      = useState<Routing[] | null>(null);
+  const [unclaimed,     setUnclaimed]     = useState<UnclaimedItem[]>([]);
+  const [dataLoading,   setDataLoading]   = useState(true);
 
   const loadListings = () =>
     Promise.all([
@@ -1253,6 +1371,13 @@ export default function Donor() {
     ])
     .then(([ls, rs]) => { setListings(ls); setRoutings(rs); })
     .catch(err => toast(err instanceof Error ? err.message : "Could not load donations"));
+
+  const loadUnclaimed = () =>
+    call<UnclaimedItem[]>("data", "unclaimed")
+      .then(setUnclaimed)
+      .catch(() => {/* silent — section just stays hidden */});
+
+  const handleRefresh = () => { loadListings(); loadUnclaimed(); };
 
   useEffect(() => {
     Promise.all([
@@ -1265,26 +1390,33 @@ export default function Donor() {
     .finally(() => setDataLoading(false));
 
     loadListings();
+    loadUnclaimed();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return (
     <DashboardShell role="DONOR" title="Donor dashboard" subtitle="List surplus food, track donations, and see your impact.">
-      <OverviewSection listings={listings} />
+      <OverviewSection listings={listings} unclaimedCount={unclaimed.length} />
       <DonateHubSection
         profile={profile}
         categories={categories}
         tags={tags}
-        onRefresh={loadListings}
+        onRefresh={handleRefresh}
       />
       <DonateDeliverySection
         categories={categories}
         tags={tags}
-        onRefresh={loadListings}
+        onRefresh={handleRefresh}
       />
       <UnfitSection
         categories={categories}
-        onRefresh={loadListings}
+        profile={profile}
+        onRefresh={handleRefresh}
+      />
+      <NeedsDecisionSection
+        items={unclaimed}
+        profile={profile}
+        onRefresh={handleRefresh}
       />
       <MyDonationsSection
         listings={listings}
