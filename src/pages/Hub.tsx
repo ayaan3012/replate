@@ -8,10 +8,11 @@
  */
 import { useEffect, useState } from "react";
 import {
-  Thermometer, Wind, Lock, Unlock, Loader2, CheckCircle,
-  XCircle, AlertTriangle, Shield, AlertCircle,
+  Thermometer, Wind, Unlock, Loader2, CheckCircle,
+  AlertTriangle, Shield, AlertCircle,
 } from "lucide-react";
 import { call, n, type Hub, type KioskResponse } from "@/lib/api";
+import { compartmentAcceptingState } from "@/components/HubList";
 import { useToast } from "@/context/ToastContext";
 
 export default function HubPage() {
@@ -134,17 +135,24 @@ export default function HubPage() {
           <p className="text-sm font-semibold text-ink mb-3">Compartments at {selectedHub.name}</p>
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             {selectedHub.compartments.map(c => {
-              const freeKg = n(c.free_kg);
-              const maxKg  = n(c.max_weight_kg);
-              const pct    = maxKg > 0 ? Math.min(100, (freeKg / maxKg) * 100) : 0;
-              const cold   = c.temp_controlled === 1;
+              const freeKg      = n(c.free_kg);
+              const maxKg       = n(c.max_weight_kg);
+              const pct         = maxKg > 0 ? Math.min(100, (freeKg / maxKg) * 100) : 0;
+              const cold        = c.temp_controlled === 1;
+              const cState      = compartmentAcceptingState(c);
+              // last_checkin is on the hub (not per-compartment), surfaced here for context
+              const lastCheckin = selectedHub.last_checkin
+                ? new Date(selectedHub.last_checkin).toLocaleString(undefined, { dateStyle: "short", timeStyle: "short" })
+                : null;
 
               return (
                 <div
                   key={c.compartment_id}
-                  className={`rounded-lg border-2 p-3 ${
-                    c.accepting ? "border-success" : "border-border"
-                  } bg-card shadow-sm`}
+                  className={`rounded-lg border-2 p-3 bg-card shadow-sm ${
+                    cState === "accepting"     ? "border-success"
+                    : cState === "full"        ? "border-error"
+                    : /* not-accepting */        "border-border"
+                  }`}
                 >
                   <div className="flex items-center justify-between mb-2">
                     <span className="font-bold text-lg text-ink">{c.label}</span>
@@ -158,7 +166,11 @@ export default function HubPage() {
                   {/* Progress meter */}
                   <div className="w-full bg-border rounded-full h-2 mb-1 overflow-hidden">
                     <div
-                      className={`h-2 rounded-full transition-all ${c.accepting ? "bg-success" : "bg-muted"}`}
+                      className={`h-2 rounded-full transition-all ${
+                        cState === "accepting" ? "bg-success"
+                        : cState === "full"    ? "bg-error"
+                        : "bg-muted"
+                      }`}
                       style={{ width: `${pct}%` }}
                     />
                   </div>
@@ -166,15 +178,32 @@ export default function HubPage() {
                     <strong className="text-ink">{freeKg.toFixed(1)}</strong> / {maxKg.toFixed(1)} kg free
                   </p>
 
-                  {/* Accepting badge */}
-                  <span className={`mt-2 inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
-                    c.accepting
-                      ? "bg-success-tint text-success"
-                      : "bg-error-tint text-error"
-                  }`}>
-                    {c.accepting ? <Unlock size={9} /> : <Lock size={9} />}
-                    {c.accepting ? "Accepting" : "Full"}
-                  </span>
+                  {/* 3-state accepting badge */}
+                  {cState === "accepting" && (
+                    <span className="mt-2 inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-success-tint text-success">
+                      <Unlock size={9} />
+                      Accepting
+                    </span>
+                  )}
+                  {cState === "full" && (
+                    <span className="mt-2 inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-error-tint text-error">
+                      <AlertCircle size={9} />
+                      Full
+                    </span>
+                  )}
+                  {cState === "not-accepting" && (
+                    <div className="mt-2 flex flex-col gap-0.5">
+                      <span className="inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full"
+                        style={{ background: "rgba(217,119,6,.12)", color: "#b45309" }}>
+                        <AlertCircle size={9} />
+                        Not accepting
+                      </span>
+                      <span className="text-[10px] text-muted">
+                        Steward check-in needed
+                        {lastCheckin ? ` · Last: ${lastCheckin}` : ""}
+                      </span>
+                    </div>
+                  )}
                 </div>
               );
             })}

@@ -608,6 +608,7 @@ Returns all hubs with their compartments, optionally sorted by distance to a giv
   - `status`: string (hub status)
   - `distance_km`: number (only present when `lat` and `lng` are provided; rounded to 1 decimal, computed via `fn_distance_km`)
   - `available_items`: number (count of `FOOD_LISTING` rows with this `hub_id`, status `'AVAILABLE'` and `expires_at > NOW()`)
+  - `last_checkin`: ISO timestamp string | `null` — most recent `logged_at` from `HUB_LOG` for this hub; `null` if the hub has never had a steward check-in. Use this to show "Steward check-in needed" when `accepting = 0`.
   - `compartments`: Array of:
     - `compartment_id`: number
     - `label`: string

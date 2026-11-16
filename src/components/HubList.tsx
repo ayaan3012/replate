@@ -13,11 +13,17 @@ import { n, type Hub } from "@/lib/api";
 // accepting=1 AND at least one compartment has free_kg > 0  → green "Accepting"
 // accepting=1 AND every compartment has free_kg = 0         → red   "Full"
 // accepting=0                                               → amber "Not accepting…"
-function hubAcceptingState(hub: Hub): "accepting" | "full" | "not-accepting" {
+export function hubAcceptingState(hub: Hub): "accepting" | "full" | "not-accepting" {
   const anyAccepting = hub.compartments.some(c => c.accepting);
   if (!anyAccepting) return "not-accepting";
   const anyFree = hub.compartments.some(c => n(c.free_kg) > 0);
   return anyFree ? "accepting" : "full";
+}
+
+// Compartment-level 3-state (same rules applied to a single compartment)
+export function compartmentAcceptingState(c: { accepting: number; free_kg: string | number }): "accepting" | "full" | "not-accepting" {
+  if (!c.accepting) return "not-accepting";
+  return n(c.free_kg) > 0 ? "accepting" : "full";
 }
 
 interface Props {
