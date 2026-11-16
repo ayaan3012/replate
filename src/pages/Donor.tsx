@@ -9,14 +9,14 @@
  *   my-donations    — tabs: Listings table (with handover expand) + Rerouted waste
  */
 import 'leaflet/dist/leaflet.css';
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   Utensils, Leaf, Wind, Copy, Check, ChevronDown, ChevronUp,
   Loader2, X, AlertCircle, CheckCircle, MapPin, LocateFixed, Snowflake,
 } from "lucide-react";
 import { call, n, type Category, type Tag, type DonorProfile,
          type DonorImpact, type Listing, type Routing, type Hub,
-         type ReportUnfitResponse } from "@/lib/api";
+         type ReportUnfitResponse, type UnclaimedItem } from "@/lib/api";
 import { useAuth }  from "@/context/AuthContext";
 import { useToast } from "@/context/ToastContext";
 import DashboardShell from "@/components/DashboardShell";
@@ -415,6 +415,159 @@ function ListingForm({ categories, tags, storageOptions, hubId, onSuccess, onClo
 
       <SubmitBtn loading={busy}>Publish listing</SubmitBtn>
     </form>
+  );
+}
+
+// ─── GradeDestinationPicker ───────────────────────────────────────────────────
+// Shared by UnfitSection and NeedsDecisionSection.
+
+type Grade = "ANIMAL_OK" | "BIOGAS_ONLY";
+type Destination = "DONOR_SITE" | "HUB_BIN";
+
+interface GradeDestinationValue {
+  grade:       Grade;
+  destination: Destination;
+  bin_id:      number | null;
+}
+
+interface GradeDestinationPickerProps {
+  value:     GradeDestinationValue;
+  onChange:  (v: GradeDestinationValue) => void;
+  profile:   DonorProfile | null;
+}
+
+function GradeDestinationPicker({ value, onChange, profile }: GradeDestinationPickerProps) {
+  const { toast } = useToast();
+  const [hubs,     setHubs]     = useState<Hub[] | null>(null);
+  const [loading,  setLoading]  = useState(false);
+  const uid = useId();
+
+  // Fetch nearest hubs when user switches to HUB_BIN
+  useEffect(() => {
+    if (value.destination !== "HUB_BIN") return;
+    const lat = n(profile?.latitude);
+    const lng = n(profile?.longitude);
+    if (lat === 0 && lng === 0) {
+      toast("Add an address to your profile to use hub bins");
+      onChange({ ...value, destination: "DONOR_SITE", bin_id: null });
+      return;
+    }
+    setLoading(true);
+    fetch(`/api/hubs?a=nearest&lat=${lat}&lng=${lng}`, { credentials: "include" })
+      .then(r => r.json())
+      .then((h: Hub[]) => setHubs(h))
+      .catch(err => toast(err instanceof Error ? err.message : "Could not load nearest hubs"))
+      .finally(() => setLoading(false));
+  // Only re-run when destination changes to HUB_BIN; profile is stable after load.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [value.destination]);
+
+  const binType = value.grade === "ANIMAL_OK" ? "ANIMAL" : "BIOGAS";
+
+  // Filter each hub's bins to those matching the selected grade
+  const matchingBins = (hubs ?? []).flatMap(hub =>
+    (hub.bins ?? [])
+      .filter(b => b.bin_type === binType)
+      .map(b => ({ hub, bin: b }))
+  );
+
+  const setGrade = (grade: Grade) =>
+    onChange({ grade, destination: value.destination, bin_id: null });
+
+  const setDestination = (destination: Destination) =>
+    onChange({ grade: value.grade, destination, bin_id: null });
+
+  const setBin = (bin_id: number) =>
+    onChange({ ...value, bin_id });
+
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Grade radios */}
+      <fieldset className="border border-border rounded-lg p-3">
+        <legend className="text-xs font-semibold text-ink px-1">Condition</legend>
+        <div className="flex flex-col gap-2 mt-1">
+          {([
+            { value: "ANIMAL_OK",   label: "Safe for animals",  desc: "Goes to farms or animal shelters" },
+            { value: "BIOGAS_ONLY", label: "Only for biogas",   desc: "Not safe for animals either" },
+          ] as { value: Grade; label: string; desc: string }[]).map(opt => (
+            <label key={opt.value} className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name={`${uid}-grade`}
+                value={opt.value}
+                checked={value.grade === opt.value}
+                onChange={() => setGrade(opt.value)}
+                className="mt-0.5 accent-[var(--color-pink)]"
+              />
+              <span>
+                <span className="block text-sm font-semibold text-ink">{opt.label}</span>
+                <span className="block text-xs text-muted">{opt.desc}</span>
+              </span>
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      {/* Destination radios */}
+      <fieldset className="border border-border rounded-lg p-3">
+        <legend className="text-xs font-semibold text-ink px-1">Where should it go?</legend>
+        <div className="flex flex-col gap-2 mt-1">
+          {([
+            { value: "DONOR_SITE", label: "A volunteer collects it from my address" },
+            { value: "HUB_BIN",   label: "Drop it at a hub bin" },
+          ] as { value: Destination; label: string }[]).map(opt => (
+            <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="radio"
+                name={`${uid}-dest`}
+                value={opt.value}
+                checked={value.destination === opt.value}
+                onChange={() => setDestination(opt.value)}
+                className="accent-[var(--color-pink)]"
+              />
+              <span className="text-sm font-medium text-ink">{opt.label}</span>
+            </label>
+          ))}
+        </div>
+
+        {/* Hub bin list when HUB_BIN is selected */}
+        {value.destination === "HUB_BIN" && (
+          <div className="mt-3 pl-5 flex flex-col gap-1.5">
+            {loading && <p className="text-xs text-muted">Loading nearest hubs…</p>}
+            {!loading && matchingBins.length === 0 && hubs !== null && (
+              <p className="text-xs text-muted">No matching bins found near your address.</p>
+            )}
+            {matchingBins.map(({ hub, bin }) => {
+              const full = n(bin.free_kg) === 0;
+              const freeKg = n(bin.free_kg).toFixed(1);
+              return (
+                <label
+                  key={bin.bin_id}
+                  className={`flex items-center gap-2 cursor-pointer ${full ? "opacity-50" : ""}`}
+                >
+                  <input
+                    type="radio"
+                    name={`${uid}-bin`}
+                    value={bin.bin_id}
+                    checked={value.bin_id === bin.bin_id}
+                    onChange={() => !full && setBin(bin.bin_id)}
+                    disabled={full}
+                    className="accent-[var(--color-pink)]"
+                  />
+                  <span className="text-xs text-ink">
+                    <strong>{hub.name}</strong>
+                    {" — "}
+                    {bin.label}
+                    {" — "}
+                    <span className={full ? "text-error" : "text-success"}>{freeKg} kg free</span>
+                  </span>
+                </label>
+              );
+            })}
+          </div>
+        )}
+      </fieldset>
+    </div>
   );
 }
 

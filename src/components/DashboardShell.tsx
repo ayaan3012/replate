@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
-  LayoutDashboard, PackageOpen, Truck, AlertTriangle, ClipboardList,
+  LayoutDashboard, PackageOpen, Truck, AlertTriangle, AlertCircle, ClipboardList,
   UtensilsCrossed, MapPin, ShoppingBag,
   Bike, Trash2, History, ExternalLink, LogOut,
   ChevronLeft, Menu, X,
@@ -27,6 +27,7 @@ const NAV: Record<Role, NavItem[]> = {
     { id: "donate-hub",      label: "Donate to a hub",     icon: PackageOpen },
     { id: "donate-delivery", label: "Donate for delivery", icon: Truck },
     { id: "unfit-food",      label: "Unfit food",          icon: AlertTriangle },
+    { id: "needs-decision",  label: "Needs your decision", icon: AlertCircle },
     { id: "my-donations",    label: "My donations",        icon: ClipboardList },
   ],
   RECIPIENT: [
