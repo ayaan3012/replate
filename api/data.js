@@ -734,18 +734,22 @@ module.exports = async (req, res) => {
              WHERE pickup_id = ? AND volunteer_id = ?`,
             [failure_reason, pickup_id, u.pid]);
         } else if (status === "DELIVERED") {
-          const [upd] = await pool.query(
-            `UPDATE PICKUP p
-               JOIN CLAIM c ON c.claim_id = p.claim_id
-             SET p.pickup_status      = 'DELIVERED',
-                 p.picked_up_at       = COALESCE(p.picked_up_at, NOW()),
-                 p.delivered_at       = NOW(),
-                 p.quantity_delivered = c.quantity_claimed
-             WHERE p.pickup_id = ? AND p.volunteer_id = ?
-               AND p.pickup_status IN ('ACCEPTED','IN_TRANSIT')`,
+          // Separate SELECT for ownership/state check — do NOT touch CLAIM in the UPDATE
+          // (trigger trg_pickup_after_update already updates CLAIM and VOLUNTEER)
+          const [[row]] = await pool.query(
+            `SELECT pickup_id FROM PICKUP
+             WHERE pickup_id = ? AND volunteer_id = ?
+               AND pickup_status IN ('ACCEPTED','IN_TRANSIT')`,
             [pickup_id, u.pid]);
-          if (upd.affectedRows === 0)
+          if (!row)
             return res.status(400).json({ error: "Pickup not found or already finished" });
+          await pool.query(
+            `UPDATE PICKUP
+             SET pickup_status = 'DELIVERED',
+                 picked_up_at  = COALESCE(picked_up_at, NOW()),
+                 delivered_at  = NOW()
+             WHERE pickup_id = ?`,
+            [pickup_id]);
         } else {
           // IN_TRANSIT
           await pool.query(
@@ -784,18 +788,21 @@ module.exports = async (req, res) => {
       // ── deliver (legacy alias → setStatus DELIVERED) ──────────────────────────
       case "deliver": {
         need("VOLUNTEER");
-        const [upd] = await pool.query(
-          `UPDATE PICKUP p
-             JOIN CLAIM c ON c.claim_id = p.claim_id
-           SET p.pickup_status      = 'DELIVERED',
-               p.picked_up_at       = COALESCE(p.picked_up_at, NOW()),
-               p.delivered_at       = NOW(),
-               p.quantity_delivered = c.quantity_claimed
-           WHERE p.pickup_id = ? AND p.volunteer_id = ?
-             AND p.pickup_status <> 'DELIVERED'`,
+        // Separate SELECT for ownership/state check — do NOT touch CLAIM in the UPDATE
+        const [[delivRow]] = await pool.query(
+          `SELECT pickup_id FROM PICKUP
+           WHERE pickup_id = ? AND volunteer_id = ?
+             AND pickup_status <> 'DELIVERED'`,
           [b.pickup_id, u.pid]);
-        if (upd.affectedRows === 0)
+        if (!delivRow)
           return res.status(400).json({ error: "Pickup not found or already finished" });
+        await pool.query(
+          `UPDATE PICKUP
+           SET pickup_status = 'DELIVERED',
+               picked_up_at  = COALESCE(picked_up_at, NOW()),
+               delivered_at  = NOW()
+           WHERE pickup_id = ?`,
+          [b.pickup_id]);
         return res.json({ ok: 1 });
       }
 
